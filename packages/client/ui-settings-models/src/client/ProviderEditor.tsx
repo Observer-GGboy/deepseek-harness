@@ -1,11 +1,12 @@
 /**
  * One provider's editor card, hand-written per adapter family: the primary
- * field is a single write-only **API key** input (the page never asks for an
- * environment-variable name — a typed key stores through `credentials.set`
- * under the profile's reference, deriving `<ROUTE>_API_KEY` when the profile
- * has none. The pi-ai profile records that derivation as `apiKeyEnv` only when
- * a key is entered; a blank key materializes a reference-free profile for
- * provider-native authentication);
+ * field is a single write-only **API key** input. A typed key stores through
+ * `credentials.set` under the profile's reference, deriving `<ROUTE>_API_KEY`
+ * when the profile has none. When another settings profile already names that
+ * reference, the card defaults to a namespace-scoped independent reference
+ * and offers sharing only as an explicit choice. The pi-ai profile records a
+ * derived reference as `apiKeyEnv` only when a key is entered; a blank key
+ * materializes a reference-free profile for provider-native authentication;
  * the collapsed 自定义设置 area carries the per-family extras (`baseURL` for
  * both families, DeepSeek's id/name/context-window model catalog, and the
  * display name and wire protocol of a pi-ai route the adapter does not ship —
@@ -31,9 +32,15 @@ import {
   DeepSeekModelsEditor, modelDrafts, validateDeepSeekModels,
 } from './DeepSeekModelsEditor.tsx'
 import { apiKeyFailure } from './apiKey.ts'
+import {
+  CredentialReferenceChoice, type CredentialReferenceMode,
+} from './CredentialReferenceChoice.tsx'
 import { EditorFooter } from './EditorFooter.tsx'
 import { ModelListEditor } from './ModelListEditor.tsx'
-import { deriveKeyRef, messageOf, protocolChoices } from './store.ts'
+import {
+  credentialReferenceConflicts, deriveIndependentKeyRef, deriveKeyRef, messageOf, protocolChoices,
+} from './store.ts'
+import type { CredentialReferenceUse, CredentialReferenceTarget } from './store.ts'
 import type { en } from './locales.ts'
 import styles from './ModelsSection.module.css'
 
@@ -69,6 +76,8 @@ export interface ProviderEditorProps {
   t: (key: keyof typeof en) => string
   /** Disable writes (read-only settings provider). */
   readOnly: boolean
+  /** Value-free reference ledger used to detect cross-profile collisions. */
+  credentialReferences?: readonly CredentialReferenceUse[]
   /** Render only the credential field and actions, without provider settings. */
   credentialOnly?: boolean
   /** Require a newly entered credential before this editor can submit. */
@@ -128,15 +137,6 @@ function layoutOf(ns: string): EditorLayout {
   return 'unknown'
 }
 
-/** The credential reference this profile resolves keys through. */
-function refFor(namespace: SettingsNamespaceView, path: readonly string[], provider: string): string {
-  const profile = getPath(namespace.value, path)
-  const named = typeof profile === 'object' && profile !== null
-    ? (profile as { apiKeyEnv?: unknown }).apiKeyEnv
-    : undefined
-  return typeof named === 'string' && named.length > 0 ? named : deriveKeyRef(provider)
-}
-
 /**
  * Render one provider's editing card.
  * @param props - the addressed profile plus wire faces and copy.
@@ -147,6 +147,10 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   const [draft, setDraft] = useState<Record<string, unknown>>(() => draftAt(namespace, settingsPath))
   const [keyDraft, setKeyDraft] = useState('')
   const [keyState, setKeyState] = useState<CredentialView | undefined>(undefined)
+  const [credentialChoice, setCredentialChoice] = useState<{
+    collision: string
+    mode: CredentialReferenceMode
+  }>(() => ({ collision: '', mode: 'separate' }))
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | undefined>(undefined)
   // A settings success advances both retry baselines immediately. Keeping the
@@ -161,7 +165,39 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   const fallback = getPath(namespace.value, settingsPath)
   const disabled = props.readOnly || busy
   const layout = layoutOf(namespace.ns)
-  const keyRef = refFor(namespace, settingsPath, props.provider)
+  const stringAt = (source: unknown, key: string): string | undefined => {
+    const value = getPath(source, [key])
+    return typeof value === 'string' && value.trim().length > 0 ? value : undefined
+  }
+  const namedKeyRef = stringAt(draft, 'apiKeyEnv') ?? stringAt(fallback, 'apiKeyEnv')
+  const keyRef = namedKeyRef ?? deriveKeyRef(props.provider)
+  const credentialTarget: CredentialReferenceTarget = {
+    provider: props.provider,
+    displayName: props.displayName,
+    settingsNs: namespace.ns,
+    settingsPath,
+  }
+  const credentialReferences = props.credentialReferences ?? []
+  const referenceConflicts = credentialReferenceConflicts(
+    credentialReferences,
+    credentialTarget,
+    keyRef,
+  )
+  const independentKeyRef = deriveIndependentKeyRef(credentialTarget, credentialReferences)
+  // A sharing choice belongs to this exact collision. If a pushed settings
+  // update changes either the reference or its owners, the next render falls
+  // back to the safe separate mode instead of carrying intent to a new target.
+  const collisionIdentity = [
+    keyRef,
+    independentKeyRef,
+    ...referenceConflicts.map(use => `${use.settingsNs}:${use.settingsPath.join('.')}:${use.provider}`),
+  ].join('\u0000')
+  const credentialMode = credentialChoice.collision === collisionIdentity
+    ? credentialChoice.mode
+    : 'separate'
+  const writeRef = referenceConflicts.length > 0 && credentialMode === 'separate'
+    ? independentKeyRef
+    : keyRef
   // The same schema read the create card makes, so the choices offered here
   // and there cannot drift apart: both come from the adapter's own `Config`.
   // Only the pi-ai layout has a per-route protocol for the read to find, and
@@ -178,20 +214,15 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
     // neither a business rejection nor a transport failure may reach the
     // browser as an unhandled rejection, so the card simply renders without
     // the "already configured" hint.
-    void api.credentials.describe({ refs: [keyRef] }).then(
+    void api.credentials.describe({ refs: [writeRef] }).then(
       (response) => {
         if (stale || !response.result.ok) return
-        setKeyState(response.result.value.credentials[keyRef])
+        setKeyState(response.result.value.credentials[writeRef])
       },
       () => undefined,
     )
     return () => { stale = true }
-  }, [api.credentials, keyRef])
-
-  const stringAt = (source: unknown, key: string): string | undefined => {
-    const value = getPath(source, [key])
-    return typeof value === 'string' && value.trim().length > 0 ? value : undefined
-  }
+  }, [api.credentials, writeRef])
   const setField = (key: string, next: string | undefined): void => {
     // A value of nothing but whitespace is cleared, not stored: `stringAt`
     // already reports it as absent, so the field would otherwise render empty
@@ -237,10 +268,13 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   const applyOnce = async (): Promise<string | undefined> => {
     const ns = namespace.ns
     // A pi-ai profile names the conventional reference only when this page is
-    // about to store a key. Otherwise the provider keeps its native auth path.
-    const next = layout === 'pi-ai' && stringAt(draft, 'apiKeyEnv') === undefined
-      && stringAt(fallback, 'apiKeyEnv') === undefined && keyValue.length > 0
-      ? setPath(draft, ['apiKeyEnv'], keyRef)
+    // about to store a key. Either family records a different reference when
+    // the safe collision path reroutes this write. Otherwise the provider
+    // keeps its existing reference or native authentication path.
+    const recordsReference = keyValue.length > 0
+      && (writeRef !== keyRef || (layout === 'pi-ai' && namedKeyRef === undefined))
+    const next = recordsReference
+      ? setPath(draft, ['apiKeyEnv'], writeRef)
       : draft
     if (props.credentialOnly !== true) {
       // The same checker gates the submit button, so a card cannot reach this
@@ -263,7 +297,11 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
       && committedOriginal === undefined
       && Object.keys(next).length === 0
     const ops: SettingsPathOpView[] = props.credentialOnly === true
-      ? []
+      // Credential-only onboarding still has to persist a route-private
+      // reference when avoiding a collision. No other provider field travels.
+      ? recordsReference
+        ? [{ op: 'set', path: [...settingsPath, 'apiKeyEnv'], value: writeRef }]
+        : []
       : materializesNativeProfile
         ? [{ op: 'set', path: [...settingsPath], value: {} }]
         : pathOps(settingsPath, committedOriginal, next)
@@ -279,7 +317,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
       setDraft(next)
     }
     if (keyValue.length > 0) {
-      const stored = await api.credentials.set({ ref: keyRef, value: keyValue })
+      const stored = await api.credentials.set({ ref: writeRef, value: keyValue })
       if (!stored.result.ok) return stored.result.error.message
     }
     setKeyDraft('')
@@ -376,6 +414,19 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
           />
           {shownKeyFailure === undefined ? null : <p className={styles['error']}>{t(shownKeyFailure)}</p>}
         </div>
+        {referenceConflicts.length === 0
+          ? null
+          : (
+            <CredentialReferenceChoice
+              conflicts={referenceConflicts}
+              sharedRef={keyRef}
+              independentRef={independentKeyRef}
+              mode={credentialMode}
+              onModeChange={(mode) => { setCredentialChoice({ collision: collisionIdentity, mode }) }}
+              disabled={disabled}
+              t={t}
+            />
+          )}
         {props.credentialOnly === true ? null : <details className={styles['customized']}>
           <summary className={styles['customizedSummary']}>{t('customized')}</summary>
           <div className={styles['customizedBody']}>

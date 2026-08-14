@@ -9,6 +9,7 @@ import {
   ModelsSection, needsSetup, providerCopy, providerTargetLabel, removeProviderProfile,
 } from '../src/client/ModelsSection.tsx'
 import type { ModelsSectionInjected, ModelsSectionProps } from '../src/client/ModelsSection.tsx'
+import { CredentialReferenceChoice } from '../src/client/CredentialReferenceChoice.tsx'
 import { pathOps } from '../src/client/ProviderEditor.tsx'
 import {
   DeepSeekModelsEditor, formatCapacity, modelDrafts, parseCapacity, validateDeepSeekModels,
@@ -225,7 +226,88 @@ async function mountDeepSeekCard(overrides: Parameters<typeof scriptedFace>[0] =
   return mounted
 }
 
+/** Official DeepSeek and a pi-ai gateway deliberately naming one reference. */
+function collidingReferenceFace() {
+  const scripted = scriptedFace()
+  const namespaces = wireNamespaces()
+  const pi = namespaces[2]!
+  const originalProviders = (pi.value as { providers: Record<string, unknown> }).providers
+  const providers = {
+    ...originalProviders,
+    deepseek: { apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://gateway.example/v1' },
+  }
+  const collisionNamespace: SettingsNamespaceView = {
+    ...pi,
+    value: { providers },
+    user: { providers },
+  }
+  scripted.face.settings.describe.mockResolvedValue(ok({
+    writable: true,
+    hasDocument: false,
+    namespaces: namespaces.map(namespace => namespace.ns === 'llm-pi-ai'
+      ? collisionNamespace
+      : namespace),
+  }))
+  scripted.face.llm.providers.mockResolvedValue(ok({
+    providers: [
+      {
+        provider: 'deepseek-official', displayName: 'DeepSeek',
+        settingsNs: 'llm-deepseek', settingsPath: [], active: true,
+      },
+      {
+        provider: 'deepseek', displayName: 'DeepSeek Gateway',
+        settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'deepseek'], active: true,
+      },
+      {
+        provider: 'openai', displayName: 'openai',
+        settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'], active: true,
+      },
+    ],
+  }))
+  return scripted
+}
+
 describe('ModelsSection', () => {
+  it('renders a labelled credential choice for a route whose display name is its id', () => {
+    const onModeChange = vi.fn()
+    const { rerender } = render(<CredentialReferenceChoice
+      conflicts={[{
+        provider: 'gateway',
+        displayName: 'gateway',
+        settingsNs: 'llm-other',
+        settingsPath: ['providers', 'gateway'],
+        ref: 'SHARED_API_KEY',
+      }]}
+      sharedRef="SHARED_API_KEY"
+      independentRef="DSH_LLM_PI_AI_DEEPSEEK_API_KEY"
+      mode="share"
+      onModeChange={onModeChange}
+      disabled={false}
+      t={t}
+    />)
+    expect(screen.getByText(content => content.includes('gateway'))).toBeTruthy()
+    fireEvent.click(screen.getByRole('radio', { name: /Use a separate credential/ }))
+    expect(onModeChange).toHaveBeenCalledWith('separate')
+
+    rerender(<CredentialReferenceChoice
+      conflicts={[{
+        provider: 'gateway',
+        displayName: 'gateway',
+        settingsNs: 'llm-other',
+        settingsPath: ['providers', 'gateway'],
+        ref: 'SHARED_API_KEY',
+      }]}
+      sharedRef="SHARED_API_KEY"
+      independentRef="DSH_LLM_PI_AI_DEEPSEEK_API_KEY"
+      mode="separate"
+      onModeChange={onModeChange}
+      disabled
+      t={t}
+    />)
+    const fieldset = screen.getByRole('radio', { name: /Use a separate credential/ }).closest('fieldset')
+    expect(fieldset instanceof HTMLFieldSetElement && fieldset.disabled).toBe(true)
+  })
+
   it('renders nothing before the slot injects its dependencies', () => {
     const uninjected = {} as ModelsSectionProps
     render(<ModelsSection {...uninjected} />)
@@ -355,6 +437,57 @@ describe('ModelsSection', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 
+  it('routes a colliding gateway key to an independent reference by default', async () => {
+    const scripted = collidingReferenceFace()
+    const { mutate, set } = await mountFace(scripted)
+    const gateway = { provider: 'deepseek', displayName: 'DeepSeek Gateway' }
+    fireEvent.click(screen.getByRole('button', { name: providerCopy(en.editProvider, gateway) }))
+
+    expect(screen.getByText(content => content.includes('DEEPSEEK_API_KEY')
+      && content.includes('DeepSeek (deepseek-official)'))).toBeTruthy()
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: /Use a separate credential/ }).checked)
+      .toBe(true)
+
+    const fixtureKey = 'fixture-gateway-key'
+    fireEvent.change(screen.getByLabelText(en.keyInput), { target: { value: fixtureKey } })
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(set).toHaveBeenCalledWith({
+      ref: 'DSH_LLM_PI_AI_DEEPSEEK_API_KEY',
+      value: fixtureKey,
+    }) })
+    expect(mutate).toHaveBeenCalledWith({
+      ns: 'llm-pi-ai',
+      ops: [{
+        op: 'set',
+        path: ['providers', 'deepseek', 'apiKeyEnv'],
+        value: 'DSH_LLM_PI_AI_DEEPSEEK_API_KEY',
+      }],
+      expectedRevision: 0,
+    })
+    expect(set).not.toHaveBeenCalledWith({ ref: 'DEEPSEEK_API_KEY', value: fixtureKey })
+    expect(JSON.stringify(mutate.mock.calls)).not.toContain(fixtureKey)
+    expect(document.body.innerHTML).not.toContain(fixtureKey)
+  })
+
+  it('shares a colliding reference only after the user selects sharing', async () => {
+    const scripted = collidingReferenceFace()
+    const { mutate, set } = await mountFace(scripted)
+    const gateway = { provider: 'deepseek', displayName: 'DeepSeek Gateway' }
+    fireEvent.click(screen.getByRole('button', { name: providerCopy(en.editProvider, gateway) }))
+    fireEvent.click(screen.getByRole('radio', { name: /Share the existing credential/ }))
+
+    const fixtureKey = 'fixture-shared-key'
+    fireEvent.change(screen.getByLabelText(en.keyInput), { target: { value: fixtureKey } })
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => {
+      expect(set).toHaveBeenCalledWith({ ref: 'DEEPSEEK_API_KEY', value: fixtureKey })
+    })
+    expect(mutate).not.toHaveBeenCalled()
+    expect(document.body.innerHTML).not.toContain(fixtureKey)
+  })
+
   it('reuses the provider editor as a required credential-only onboarding form', async () => {
     let finishSet: ((response: RpcResponse<Record<string, never>>) => void) | undefined
     const set = vi.fn(() => new Promise<RpcResponse<Record<string, never>>>((resolve) => {
@@ -410,6 +543,49 @@ describe('ModelsSection', () => {
     await act(async () => {
       finishSet?.(ok({}))
       await Promise.resolve()
+    })
+    expect(onClose).toHaveBeenCalledWith(true)
+  })
+
+  it('lets credential-only onboarding persist only an independent reference on collision', async () => {
+    const { face, mutate, set } = scriptedFace()
+    const onClose = vi.fn()
+    const { ProviderEditor } = await import('../src/client/ProviderEditor.tsx')
+    render(<ProviderEditor
+      provider="deepseek-official"
+      displayName="DeepSeek"
+      namespace={wireNamespaces()[0]!}
+      settingsPath={[]}
+      api={face as never}
+      t={t}
+      readOnly={false}
+      credentialOnly
+      credentialRequired
+      credentialReferences={[{
+        provider: 'deepseek',
+        displayName: 'DeepSeek Gateway',
+        settingsNs: 'llm-pi-ai',
+        settingsPath: ['providers', 'deepseek'],
+        ref: 'DEEPSEEK_API_KEY',
+      }]}
+      onClose={onClose}
+    />)
+
+    fireEvent.change(screen.getByLabelText(en.keyInput), { target: { value: 'fixture-onboarding-key' } })
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(set).toHaveBeenCalledWith({
+      ref: 'DSH_LLM_DEEPSEEK_DEEPSEEK_OFFICIAL_API_KEY',
+      value: 'fixture-onboarding-key',
+    }) })
+    expect(mutate).toHaveBeenCalledWith({
+      ns: 'llm-deepseek',
+      ops: [{
+        op: 'set',
+        path: ['apiKeyEnv'],
+        value: 'DSH_LLM_DEEPSEEK_DEEPSEEK_OFFICIAL_API_KEY',
+      }],
+      expectedRevision: 0,
     })
     expect(onClose).toHaveBeenCalledWith(true)
   })
@@ -1083,6 +1259,24 @@ describe('ModelsSection', () => {
     fireEvent.change(editorKey, { target: { value: 'sk-live' } })
     fireEvent.click(screen.getByText(en.apply))
     await waitFor(() => { expect(set).toHaveBeenCalledTimes(1) })
+  })
+
+  it('keeps a shared credential when deleting only one of its provider profiles', async () => {
+    const scripted = collidingReferenceFace()
+    scripted.face.credentials.describe.mockImplementation((payload: { refs: string[] }) => Promise.resolve(ok({
+      credentials: Object.fromEntries(payload.refs.map(ref => [ref, { configured: true, writable: true }])),
+    })))
+    const { mutate, unset } = await mountFace(scripted)
+    const gateway = { provider: 'deepseek', displayName: 'DeepSeek Gateway' }
+    fireEvent.click(screen.getByRole('button', { name: providerCopy(en.removeProvider, gateway) }))
+
+    const dialog = screen.getByRole('dialog', { name: providerCopy(en.deleteTitle, gateway) })
+    expect(dialog.textContent).toContain(providerCopy(en.deleteDescription, gateway))
+    expect(dialog.textContent).not.toContain(providerCopy(en.deleteDescriptionWithCredential, gateway))
+    fireEvent.click(within(dialog).getByRole('button', { name: providerCopy(en.deleteConfirm, gateway) }))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalledTimes(1) })
+    expect(unset).not.toHaveBeenCalled()
   })
 
   it('requires confirmation before removing a user-added provider', async () => {

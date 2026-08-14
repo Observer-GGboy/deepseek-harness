@@ -33,6 +33,24 @@ export interface ProviderRow {
   credential: CredentialView | undefined
 }
 
+/** Secret-free identity of one route that may name a credential reference. */
+export interface CredentialReferenceTarget {
+  /** Provider route id. */
+  provider: string
+  /** Human-facing provider name. */
+  displayName: string
+  /** Namespace that owns the profile. */
+  settingsNs: string
+  /** Path from the namespace root to the profile. */
+  settingsPath: readonly string[]
+}
+
+/** One configured route's reference use; this never contains a credential value. */
+export interface CredentialReferenceUse extends CredentialReferenceTarget {
+  /** Credential reference named by the resolved profile. */
+  ref: string
+}
+
 /** Page snapshot. */
 export interface ModelsSettingsState {
   status: 'idle' | 'loading' | 'ready' | 'error'
@@ -68,6 +86,100 @@ export function messageOf(error: unknown): string {
  */
 export function deriveKeyRef(provider: string): string {
   return `${provider.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
+}
+
+/** Whether two reference records address the same settings profile. */
+function sameCredentialTarget(
+  left: CredentialReferenceTarget,
+  right: CredentialReferenceTarget,
+): boolean {
+  return left.provider === right.provider
+    && left.settingsNs === right.settingsNs
+    && left.settingsPath.length === right.settingsPath.length
+    && left.settingsPath.every((segment, index) => segment === right.settingsPath[index])
+}
+
+/**
+ * Project the joined rows into the value-free reference ledger the editors
+ * use for collision checks. A credential's configured/source state is not
+ * needed here, and its secret value never crosses the wire at all.
+ * @param rows - current provider join.
+ * @returns every route that currently names a credential reference.
+ */
+export function credentialReferenceUses(rows: readonly ProviderRow[]): CredentialReferenceUse[] {
+  return rows.flatMap(row => row.apiKeyEnv === undefined
+    ? []
+    : [{
+      provider: row.entry.provider,
+      displayName: row.entry.displayName,
+      settingsNs: row.entry.settingsNs,
+      settingsPath: row.entry.settingsPath,
+      ref: row.apiKeyEnv,
+    }])
+}
+
+/**
+ * Find the other settings profiles that already name `ref`. The target's own
+ * current row is excluded: keeping its credential is replacement, not a
+ * cross-provider collision.
+ * @param uses - value-free reference ledger.
+ * @param target - profile about to write a credential.
+ * @param ref - proposed credential reference.
+ * @returns other profiles that would observe the same credential write.
+ */
+export function credentialReferenceConflicts(
+  uses: readonly CredentialReferenceUse[],
+  target: CredentialReferenceTarget,
+  ref: string,
+): CredentialReferenceUse[] {
+  return uses.filter(use => use.ref === ref && !sameCredentialTarget(use, target))
+}
+
+/**
+ * Derive a route-private reference from namespace plus route id. If another
+ * profile already names the normalized candidate, add a numeric suffix. The
+ * result is deterministic for the current ledger and remains a valid
+ * credential/environment identifier.
+ * @param target - profile that needs its own credential.
+ * @param uses - current value-free reference ledger.
+ * @returns an unused route-scoped credential reference.
+ */
+export function deriveIndependentKeyRef(
+  target: CredentialReferenceTarget,
+  uses: readonly CredentialReferenceUse[],
+): string {
+  const candidate = deriveKeyRef(`dsh-${target.settingsNs}-${target.provider}`)
+  const occupied = new Set(
+    uses.filter(use => !sameCredentialTarget(use, target)).map(use => use.ref),
+  )
+  if (!occupied.has(candidate)) return candidate
+  const stem = candidate.slice(0, -'_API_KEY'.length)
+  for (let suffix = 2; ; suffix += 1) {
+    const next = `${stem}_${String(suffix)}_API_KEY`
+    if (!occupied.has(next)) return next
+  }
+}
+
+/**
+ * Whether a reference belongs to one of this page's deterministic naming
+ * schemes for `target`: the legacy route-wide name or the namespace-scoped
+ * independent name (including a collision suffix). This is intentionally
+ * narrow so deleting a profile never guesses ownership of an arbitrary ref.
+ * @param target - profile that names the reference.
+ * @param ref - resolved credential reference.
+ * @returns whether the page can identify the reference as one it creates.
+ */
+export function isPageManagedCredentialRef(
+  target: CredentialReferenceTarget,
+  ref: string,
+): boolean {
+  if (ref === deriveKeyRef(target.provider)) return true
+  const scoped = deriveKeyRef(`dsh-${target.settingsNs}-${target.provider}`)
+  if (ref === scoped) return true
+  const stem = scoped.slice(0, -'_API_KEY'.length)
+  if (!ref.startsWith(`${stem}_`) || !ref.endsWith('_API_KEY')) return false
+  const suffix = ref.slice(stem.length + 1, -'_API_KEY'.length)
+  return /^\d+$/.test(suffix) && Number(suffix) >= 2
 }
 
 /**

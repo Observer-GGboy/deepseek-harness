@@ -19,6 +19,8 @@ import { join } from 'node:path'
 import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import {
   assertFixtureInventory, captureStableAria, compareOrRefreshGolden,
   launchWebScaffold, watchConsole, webSnapshotMode, type WebScaffold,
@@ -32,7 +34,10 @@ const DECLARED_EXPECTED = join(SNAPSHOT_DIR, 'declared.expected.md')
 const DECLARED_EDIT_EXPECTED = join(SNAPSHOT_DIR, 'declared-edit.expected.md')
 const NATIVE_DELETE_EXPECTED = join(SNAPSHOT_DIR, 'native-delete.expected.md')
 const DELETE_EXPECTED = join(SNAPSHOT_DIR, 'delete.expected.md')
+const COLLISION_EXPECTED = join(SNAPSHOT_DIR, 'collision.expected.md')
 const MODE = webSnapshotMode()
+const SHARED_DEEPSEEK_REF = credentialRef('DEEPSEEK_API_KEY')
+const INDEPENDENT_DEEPSEEK_REF = credentialRef('DSH_LLM_PI_AI_DEEPSEEK_API_KEY')
 
 describe('web e2e: Models settings page configures a dormant provider', () => {
   let scaffold: WebScaffold
@@ -279,8 +284,71 @@ describe('web e2e: Models settings page configures a dormant provider', () => {
 
   it.skipIf(MODE === 'record')('keeps the fixture inventory closed', async () => {
     await assertFixtureInventory(SNAPSHOT_DIR, [
-      'configured.expected.md', 'declared-edit.expected.md', 'declared.expected.md',
+      'collision.expected.md', 'configured.expected.md', 'declared-edit.expected.md', 'declared.expected.md',
       'delete.expected.md', 'empty.expected.md', 'native-delete.expected.md',
     ])
   })
+})
+
+describe.skipIf(MODE === 'record')('web e2e: Models isolates a colliding provider credential', () => {
+  let scaffold: WebScaffold
+  let browser: Browser
+  let page: Page
+  let tripwire: ReturnType<typeof watchConsole>
+  const originalKey = 'fixture-official-key'
+  const gatewayKey = 'fixture-gateway-key'
+
+  beforeAll(async () => {
+    scaffold = await launchWebScaffold({ deepSeekMissingCredential: true })
+    await scaffold.ctx.credentials.set(SHARED_DEEPSEEK_REF, originalKey)
+    await scaffold.ctx.settings.mutate(settingsNamespace('llm-pi-ai'), [{
+      op: 'set',
+      path: ['providers', 'deepseek'],
+      value: { apiKeyEnv: SHARED_DEEPSEEK_REF },
+    }])
+    browser = await chromium.launch()
+    page = await browser.newPage({ viewport: { width: 1680, height: 1000 }, locale: ZH_BROWSER_LOCALE })
+    tripwire = watchConsole(page)
+    await page.goto(scaffold.baseUrl, { waitUntil: 'load' })
+    await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
+  }, 120_000)
+
+  afterAll(async () => {
+    await browser?.close()
+    await scaffold?.close()
+  })
+
+  it('shows the safe default and preserves official DeepSeek when the gateway saves', async () => {
+    onTestFailed(() => saveFailureShot(page, 'web-e2e-models-credential-collision'))
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '设置' })
+    await dialog.getByRole('button', { name: '模型' }).click()
+    await dialog.getByRole('button', { name: '编辑 deepseek', exact: true }).click()
+
+    const choice = dialog.getByRole('group', { name: '凭据存储方式' })
+    await choice.waitFor({ timeout: 10_000 })
+    await expect.poll(
+      () => choice.getByRole('radio', { name: /使用独立凭据/ }).isChecked(),
+      { timeout: 10_000 },
+    ).toBe(true)
+    expect(await choice.textContent()).toContain('DeepSeek (deepseek-official)')
+    const snapshot = await captureStableAria(page, '[role="dialog"]', scaffold.workspaceCwd)
+    await compareOrRefreshGolden(COLLISION_EXPECTED, snapshot, MODE)
+
+    await dialog.getByLabel('API 密钥', { exact: true }).fill(gatewayKey)
+    await dialog.getByRole('button', { name: '保存', exact: true }).click()
+    await dialog.getByText('已保存 deepseek。', { exact: true }).waitFor({ timeout: 10_000 })
+
+    const settings = await readFile(join(scaffold.harnessHome, 'settings.yaml'), 'utf8')
+    expect(settings).toContain('apiKeyEnv: DSH_LLM_PI_AI_DEEPSEEK_API_KEY')
+    expect(settings).not.toContain(gatewayKey)
+    expect(await scaffold.ctx.credentials.resolve(SHARED_DEEPSEEK_REF))
+      .toEqual({ value: originalKey, source: 'file' })
+    expect(await scaffold.ctx.credentials.resolve(INDEPENDENT_DEEPSEEK_REF))
+      .toEqual({ value: gatewayKey, source: 'file' })
+    expect(await page.content()).not.toContain(originalKey)
+    expect(await page.content()).not.toContain(gatewayKey)
+    expect(tripwire.warnings).toEqual([])
+    expect(tripwire.pageErrors).toEqual([])
+  }, 60_000)
 })

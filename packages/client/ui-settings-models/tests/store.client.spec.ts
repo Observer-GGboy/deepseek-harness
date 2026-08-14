@@ -1,7 +1,11 @@
 /** Page-store join: directory × namespaces × credentials, with last-good rows on failure. */
 import { describe, expect, it } from 'vitest'
 import type { RpcResponse } from '@deepseek-ai/dsh-api-remotes/client'
-import { messageOf, ModelsSettingsStore } from '../src/client/store.ts'
+import {
+  credentialReferenceConflicts, credentialReferenceUses, deriveIndependentKeyRef,
+  isPageManagedCredentialRef, messageOf, ModelsSettingsStore,
+} from '../src/client/store.ts'
+import type { ProviderRow } from '../src/client/store.ts'
 
 let nextRpc = 0
 function ok<T>(value: T): RpcResponse<T> {
@@ -261,5 +265,89 @@ describe('messageOf', () => {
     expect(messageOf(new Error('connection lost'))).toBe('connection lost')
     expect(messageOf('the host refused')).toBe('the host refused')
     expect(messageOf(undefined)).toBe('undefined')
+  })
+})
+
+describe('credential reference ledger', () => {
+  const rows: ProviderRow[] = [
+    {
+      entry: {
+        provider: 'deepseek-official',
+        displayName: 'DeepSeek',
+        settingsNs: 'llm-deepseek',
+        settingsPath: [],
+        active: true,
+      },
+      configured: true,
+      removable: false,
+      apiKeyEnv: 'DEEPSEEK_API_KEY',
+      credential: { configured: true, writable: true },
+    },
+    {
+      entry: {
+        provider: 'deepseek',
+        displayName: 'DeepSeek Gateway',
+        settingsNs: 'llm-pi-ai',
+        settingsPath: ['providers', 'deepseek'],
+        active: true,
+      },
+      configured: true,
+      removable: true,
+      apiKeyEnv: 'DEEPSEEK_API_KEY',
+      credential: { configured: true, writable: true },
+    },
+  ]
+
+  it('finds only the other profile using a shared reference', () => {
+    const uses = credentialReferenceUses(rows)
+    const target = {
+      provider: 'deepseek',
+      displayName: 'DeepSeek Gateway',
+      settingsNs: 'llm-pi-ai',
+      settingsPath: ['providers', 'deepseek'],
+    }
+    expect(credentialReferenceConflicts(uses, target, 'DEEPSEEK_API_KEY'))
+      .toEqual([expect.objectContaining({ provider: 'deepseek-official', settingsNs: 'llm-deepseek' })])
+    expect(deriveIndependentKeyRef(target, uses)).toBe('DSH_LLM_PI_AI_DEEPSEEK_API_KEY')
+  })
+
+  it('suffixes a normalized scoped reference already owned by another profile', () => {
+    const uses = [
+      ...credentialReferenceUses(rows),
+      {
+        provider: 'other',
+        displayName: 'Other',
+        settingsNs: 'llm-other',
+        settingsPath: [],
+        ref: 'DSH_LLM_PI_AI_DEEPSEEK_API_KEY',
+      },
+      {
+        provider: 'other-2',
+        displayName: 'Other 2',
+        settingsNs: 'llm-other',
+        settingsPath: [],
+        ref: 'DSH_LLM_PI_AI_DEEPSEEK_2_API_KEY',
+      },
+    ]
+    expect(deriveIndependentKeyRef({
+      provider: 'deepseek',
+      displayName: 'DeepSeek Gateway',
+      settingsNs: 'llm-pi-ai',
+      settingsPath: ['providers', 'deepseek'],
+    }, uses)).toBe('DSH_LLM_PI_AI_DEEPSEEK_3_API_KEY')
+  })
+
+  it('identifies only the deterministic route-wide and scoped references as page-managed', () => {
+    const target = {
+      provider: 'deepseek',
+      displayName: 'DeepSeek Gateway',
+      settingsNs: 'llm-pi-ai',
+      settingsPath: ['providers', 'deepseek'],
+    }
+    expect(isPageManagedCredentialRef(target, 'DEEPSEEK_API_KEY')).toBe(true)
+    expect(isPageManagedCredentialRef(target, 'DSH_LLM_PI_AI_DEEPSEEK_API_KEY')).toBe(true)
+    expect(isPageManagedCredentialRef(target, 'DSH_LLM_PI_AI_DEEPSEEK_10_API_KEY')).toBe(true)
+    expect(isPageManagedCredentialRef(target, 'DSH_LLM_PI_AI_DEEPSEEK_1_API_KEY')).toBe(false)
+    expect(isPageManagedCredentialRef(target, 'TEAM_DEEPSEEK_API_KEY')).toBe(false)
   })
 })

@@ -645,7 +645,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'session/imported': SessionImportedEventData
 ```
 
-来源：[`packages/session-import/session-import-local/src/index.ts:57`](../packages/session-import/session-import-local/src/index.ts)
+来源：[`packages/session-import/session-import-local/src/index.ts:62`](../packages/session-import/session-import-local/src/index.ts)
 
 <a id="sessiontitle--log-only"></a>
 

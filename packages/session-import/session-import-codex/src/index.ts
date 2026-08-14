@@ -24,6 +24,8 @@ export const inject = ['sessionImports']
 const SOURCE_KIND = 'codex' as const
 const CONVERTER_VERSION = 'codex-rollout-v1'
 const DEFAULT_MAX_CANDIDATES = 500
+const MIN_SUPPORTED_VERSION = [0, 144, 0] as const
+const MAX_SUPPORTED_VERSION = [0, 148, 999] as const
 
 /** Local Codex source configuration. */
 export interface Config {
@@ -41,6 +43,42 @@ export const Config: s<Config> = s.object({
 type RecordMap = Record<string, unknown>
 const isRecord = (value: unknown): value is RecordMap =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
+
+function versionParts(version: string): readonly [number, number, number] | undefined {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/u.exec(version)
+  if (match === null) return undefined
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+function compareVersion(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): number {
+  for (const index of [0, 1, 2] as const) {
+    const difference = left[index] - right[index]
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
+function assertSupportedVersion(version: unknown, record: number): string {
+  if (typeof version !== 'string') {
+    throw new ForeignSessionImportError(
+      'unsupported-version', SOURCE_KIND, record,
+      `codex version unknown at record ${record} is unsupported`,
+    )
+  }
+  const parsed = versionParts(version)
+  if (parsed === undefined
+    || compareVersion(parsed, MIN_SUPPORTED_VERSION) < 0
+    || compareVersion(parsed, MAX_SUPPORTED_VERSION) > 0) {
+    throw new ForeignSessionImportError(
+      'unsupported-version', SOURCE_KIND, record,
+      `codex version ${version} at record ${record} is unsupported`,
+    )
+  }
+  return version
+}
 
 /**
  * Extract the thread identity from a supported Codex rollout basename.
@@ -65,10 +103,11 @@ function textParts(content: unknown): string {
 /** Selected-file parser. Unknown structural records fail closed. */
 class CodexCaptureParser {
   readonly accumulator: ForeignSnapshotAccumulator
-  sourceVersion = 'unknown'
+  sourceVersion = ''
   cwdHint: string | undefined
   private metaSeen = false
   private metaId: string | undefined
+  private readonly versions = new Set<string>()
   private readonly calls = new Map<string, number>()
 
   constructor(
@@ -123,15 +162,14 @@ class CodexCaptureParser {
 
   private sessionMeta(value: unknown, record: number): void {
     if (!isRecord(value) || typeof value['id'] !== 'string') this.corrupt(record)
-    if (this.metaSeen) {
-      throw new ForeignSessionImportError(
-        'duplicate-record', SOURCE_KIND, record, `codex record ${record} duplicates session metadata`,
-      )
-    }
+    const id = value['id']
+    if (id !== this.wantedId || (this.metaId !== undefined && this.metaId !== id)) this.corrupt(record)
     this.metaSeen = true
-    this.metaId = value['id']
-    if (this.metaId !== this.wantedId) this.corrupt(record)
-    this.sourceVersion = typeof value['cli_version'] === 'string' ? value['cli_version'] : 'unknown'
+    this.metaId = id
+    this.versions.add(assertSupportedVersion(value['cli_version'], record))
+    this.sourceVersion = [...this.versions].sort((left, right) => {
+      return left.localeCompare(right, 'en', { numeric: true })
+    }).join('+')
     const cwd = value['cwd']
     if (typeof cwd === 'string' && isAbsolute(cwd)) this.cwdHint = resolve(cwd)
   }
@@ -175,6 +213,7 @@ class CodexCaptureParser {
       const index = callId === undefined ? undefined : this.calls.get(callId)
       if (index !== undefined) {
         const previous = this.accumulator.tools[index]
+        /* v8 ignore next -- the index comes from the append-only tool array at registration. */
         if (previous !== undefined) {
           this.accumulator.tools[index] = Object.freeze({ ...previous, status: 'completed' })
         }
@@ -299,11 +338,9 @@ export class CodexSessionImportProvider implements ForeignSessionProvider {
       maxSourceBytes: request.limits.maxSourceBytes,
       maxLineBytes: request.limits.maxLineBytes,
       ...request.signal === undefined ? {} : { signal: request.signal },
-      ...request.onProgress === undefined ? {} : { onProgress: request.onProgress },
       onRecord: (record) => { parser.parse(record) },
     })
     parser.finish()
-    request.onProgress?.({ phase: 'converting', completedBytes: capture.capturedBytes, totalBytes: capture.capturedBytes })
     return Object.freeze({
       provenance: Object.freeze({
         sourceKind: SOURCE_KIND,
@@ -328,5 +365,3 @@ export class CodexSessionImportProvider implements ForeignSessionProvider {
 export function apply(ctx: Context, config: Config): void {
   ctx.sessionImports.registerProvider(new CodexSessionImportProvider(config))
 }
-
-export default apply

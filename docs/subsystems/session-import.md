@@ -20,25 +20,26 @@ External JSON never enters the native event union. Each Service Provider reduces
 
 Discovery recursively enumerates regular files and stats matching UUID filenames without opening bodies or following symbolic links. Capture canonicalizes the selected file under its configured root, fixes the prefix at the initial byte size, streams complete newline-delimited records under explicit limits, and hashes that exact prefix twice. A later append is allowed and remains outside the snapshot. Replacement, truncation, middle mutation, malformed complete records, duplicate identities, out-of-order timestamps, and unknown required structures reject the capture without a reservation.
 
-The parsers retain only visible user/assistant text, marked generated summaries, and body-free tool names/statuses. Common credential shapes are redacted before the snapshot and again before native conversion. Tool input/output, system/developer instructions, reasoning, attachment references, environment data, and source paths have no persisted representation.
+The parsers retain only visible user/assistant text, marked generated summaries, and body-free tool names/statuses. Common credential shapes are redacted before the snapshot and again before native conversion. Tool input/output, system/developer instructions, reasoning, attachment references, environment data, and source paths have no persisted representation. Converter v1 accepts Codex `0.144.0` through `0.148.999` and Claude Code `2.1.128` through `2.1.222`; missing, malformed, or outside-range versions fail closed. Supported in-file version transitions remain visible in provenance. Claude Code's body-free `frame-link` metadata is explicitly ignored.
 
 ## Reservation and commit
 
-Capture creates an opaque, bounded, process-local reservation. Commit accepts only that reservation plus an existing Workspace id and usable Agent-preset id. A reservation commits once; concurrent calls with different choices conflict, and leaving Settings discards an uncommitted reservation.
+Capture creates an opaque, bounded, process-local reservation. Commit accepts only that reservation plus an existing Workspace id, usable Agent-preset id, and exact provider/model route. A reservation commits once; concurrent calls with different choices conflict, and leaving Settings discards an uncommitted reservation. Callers waiting on the same choice cancel independently; the shared commit is aborted only after its last waiter leaves.
 
-The target Session id hashes the Host-local source file identity, source Session id, and stable-prefix digest. `SessionStore.prepare()` validates the complete native seed before storage. The first JSONL publication uses no-replace materialization; SQLite writes the header and complete event batch in one transaction. Therefore one of 2, 10, or 100 equivalent contenders wins, and the rest inspect the same balanced target instead of publishing duplicates or partial Sessions.
+The target Session id hashes the Host-local source file identity, source Session id, and stable-prefix digest. `SessionStore.prepare()` validates the complete native seed before storage. The first JSONL publication uses no-replace materialization; SQLite writes the header and complete event batch in one transaction. Therefore one of 2, 10, or 100 equivalent contenders—even from independent Node processes—wins, and the rest inspect the same balanced target instead of publishing duplicates or partial Sessions.
 
-The ignorable `session/imported` event persists safe source kind, source Session id, vendor/converter versions, prefix digest, capture time, counts, and partial-tail status. It excludes the absolute transcript path and Host-local file identity. Immutable Session metadata makes a retry with a different Workspace path or Agent preset an explicit conflict.
+The ignorable `session/imported` event persists safe source kind, source Session id, vendor/converter versions, prefix digest, capture time, counts, and partial-tail status. It excludes the absolute transcript path and Host-local file identity. Immutable Session metadata makes a retry with a different Workspace path, Agent preset, provider, or model an explicit conflict.
 
 ## Continuation semantics
 
-Imported messages become closed native turns. Historical tools become a labeled inert user-context summary; no `tool/call` or `tool/result` event is synthesized, so nothing can replay. `session/end-seed` closes the validated historical prefix. New work begins only when the user sends the next message under the chosen Workspace and Agent preset.
+Imported messages become closed native turns. Historical tools become a labeled inert user-context summary; no `tool/call` or `tool/result` event is synthesized, so nothing can replay. `session/end-seed` closes the validated historical prefix. The Host assembles the chosen preset's system prompt and tools on a detached Session, records the confirmed provider/model in `request/header`, and measures the final seed before publication. Safe import capacity is the model context window minus its default output allowance (or 10%) and the larger of 4096 tokens or 10% for composition and the next prompt. New work begins only when the user sends the next message under that confirmed Workspace, preset, and model route.
 
 Workspace attachment is best-effort after the atomic Session publication. Failure returns `workspaceAttached: false` and leaves the complete Session selectable and usable; retry never republishes its event log.
 
 ## Security and operational limits
 
 - The configured source roots and size/count budgets are Host policy, not Client input.
+- The v1 UI reports only bounded stage status (discover, capture, commit); it does not expose byte progress across the Remote boundary.
 - Detection of arbitrary prose secrets is impossible; the feature combines common-pattern redaction with structural exclusion and a metadata-only Client contract.
 - Format drift fails closed. Supporting a new required vendor record needs parser fixtures and an explicit converter-version change.
 - The snapshot is immutable. Import again to capture a later appended prefix; there is no ongoing synchronization.
@@ -59,7 +60,7 @@ Host Remote consumer. Providers remain separately registered on `ctx.sessionImpo
 
 ```ts cordis-catalog
 /**
- * Current provider/workspace/preset choices for the confirmation screen.
+ * Current source/workspace/preset/model choices for the confirmation screen.
  * @param signal Remote request cancellation signal.
  * @returns Available source kinds and explicit continuation targets.
  */
@@ -82,7 +83,7 @@ Host Remote consumer. Providers remain separately registered on `ctx.sessionImpo
 @Remote('capture') async capture( request: SessionImportCaptureRequest, signal: AbortSignal, ): Promise<SessionImportResult<SessionImportCaptureValue>>
 
 /**
- * Atomically publish after explicit workspace and preset confirmation.
+ * Atomically publish after explicit workspace, preset, and model confirmation.
  * @param request Reservation and confirmed continuation targets.
  * @param signal Remote request cancellation signal.
  * @returns Published session identity and idempotency/attachment status.
@@ -97,7 +98,7 @@ Host Remote consumer. Providers remain separately registered on `ctx.sessionImpo
 @Remote('discard') discard(request: SessionImportDiscardRequest): SessionImportResult<SessionImportDiscardValue>
 ```
 
-Source: [`packages/session-import/session-import-local/src/index.ts:264`](../../packages/session-import/session-import-local/src/index.ts)
+Source: [`packages/session-import/session-import-local/src/index.ts:317`](../../packages/session-import/session-import-local/src/index.ts)
 
 <a id="ctxsessionimports--sessionimportregistry"></a>
 

@@ -93,11 +93,21 @@ export interface SessionImportPresetOption {
   readonly name: string
 }
 
+/** One exact continuation route with an adapter-owned context budget. */
+export interface SessionImportModelOption {
+  readonly provider: string
+  readonly model: string
+  readonly name: string
+  readonly contextWindow: number
+  readonly usableImportTokens: number
+}
+
 /** Current confirmation choices. */
 export interface SessionImportOptionsValue {
   readonly sourceKinds: readonly SessionImportSourceKind[]
   readonly workspaces: readonly SessionImportWorkspaceOption[]
   readonly presets: readonly SessionImportPresetOption[]
+  readonly models: readonly SessionImportModelOption[]
 }
 
 /** Final explicit commit request. */
@@ -105,6 +115,8 @@ export interface SessionImportCommitRequest {
   readonly reservationId: string
   readonly workspaceId: string
   readonly agentPreset: string
+  readonly provider: string
+  readonly model: string
 }
 
 /** Published target. */

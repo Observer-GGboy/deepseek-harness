@@ -1,0 +1,55 @@
+- banner:
+  - navigation "Session hierarchy":
+    - button "CONTINUE_AFTER_IMPORT" [disabled]
+  - img
+  - text: Standard mode
+  - button "Session log":
+    - text: Session log
+    - img
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+- button "Context injection session-import":
+  - img
+  - img
+  - text: Context injection session-import
+- button "Context injection session-import":
+  - img
+  - img
+  - text: Context injection session-import
+- paragraph: IMPORTED_HISTORY_ASSISTANT
+- button "Copy":
+  - img
+- button "Good response":
+  - img
+- button "Bad response":
+  - img
+- button "Branch into a new conversation":
+  - img
+- text: {{clock}} Ran for {{duration}} CONTINUE_AFTER_IMPORT {{clock}}
+- button "Copy":
+  - img
+- button "Context injection @deepseek-ai/dsh-system-prompt":
+  - img
+  - img
+  - text: Context injection @deepseek-ai/dsh-system-prompt
+- paragraph: CONTINUED_AFTER_IMPORT_OK
+- button "Copy":
+  - img
+- button "Good response":
+  - img
+- button "Bad response":
+  - img
+- button "Branch into a new conversation":
+  - img
+- text: {{clock}} Ran for {{duration}} TTFT {{duration}}
+- textbox "Message the agent"
+- button "Commands":
+  - img
+- 'button "Access mode, current: Workspace Write"': Workspace Write
+- button "Select model, current DeepSeek-V4-Flash":
+  - text: DeepSeek-V4-Flash
+  - img
+- button "0% of context used"
+- button "Send message" [disabled]
+- text: 2 turns · 2 steps LLM {{duration}} TTFT avg {{duration}} Cache hit 0% Input 64 tok · Output 8 tok

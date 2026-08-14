@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto'
 import { open, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import type { ForeignSessionCaptureProgress, ForeignSessionSourceKind } from './types.ts'
+import type { ForeignSessionSourceKind } from './types.ts'
 import { ForeignSessionImportError } from './types.ts'
 
 /** One complete decoded JSONL record. */
@@ -28,8 +28,13 @@ export interface StableJsonlCaptureOptions {
   readonly maxSourceBytes: number
   readonly maxLineBytes: number
   readonly signal?: AbortSignal
-  readonly onProgress?: (progress: ForeignSessionCaptureProgress) => void
   readonly onRecord: (record: StableJsonlRecord) => void
+  /** Deterministic mutation points for fault-injection tests; production providers omit them. */
+  readonly faults?: {
+    readonly afterReadChunk?: (completedBytes: number, totalBytes: number) => void | Promise<void>
+    readonly beforeRehash?: () => void | Promise<void>
+    readonly beforeFinalStat?: () => void | Promise<void>
+  }
 }
 
 const READ_CHUNK_BYTES = 64 * 1024
@@ -136,6 +141,7 @@ export async function captureStableJsonl(options: StableJsonlCaptureOptions): Pr
       const chunk = Buffer.from(buffer.subarray(0, read.bytesRead))
       digest.update(chunk)
       position += read.bytesRead
+      await options.faults?.afterReadChunk?.(position, capturedBytes)
       pending = pending.byteLength === 0 ? chunk : Buffer.concat([pending, chunk])
       let newline = pending.indexOf(0x0a)
       while (newline !== -1) {
@@ -168,7 +174,6 @@ export async function captureStableJsonl(options: StableJsonlCaptureOptions): Pr
           `${options.sourceKind} record ${recordIndex + 1} exceeds the configured line budget`,
         )
       }
-      options.onProgress?.({ phase: 'reading', completedBytes: position, totalBytes: capturedBytes })
     }
   } finally {
     await handle.close()
@@ -179,10 +184,10 @@ export async function captureStableJsonl(options: StableJsonlCaptureOptions): Pr
     )
   }
   throwIfAborted(options.signal)
-  options.onProgress?.({ phase: 'validating', completedBytes: capturedBytes, totalBytes: capturedBytes })
   const firstDigest = digest.digest('hex')
   let secondDigest: string
   try {
+    await options.faults?.beforeRehash?.()
     secondDigest = await hashPrefix(safe.file, capturedBytes, options.signal)
   } catch {
     throwIfAborted(options.signal)
@@ -190,6 +195,7 @@ export async function captureStableJsonl(options: StableJsonlCaptureOptions): Pr
       'source-changed', options.sourceKind, undefined, `${options.sourceKind} source changed during capture`,
     )
   }
+  await options.faults?.beforeFinalStat?.()
   const after = await stat(safe.file, { bigint: true })
   if (after.dev !== safe.before.dev || after.ino !== safe.before.ino
     || after.size < safe.before.size || firstDigest !== secondDigest) {

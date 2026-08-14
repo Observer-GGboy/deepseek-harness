@@ -1012,7 +1012,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     methods: [
       {
         signature: '@Remote(\'options\') async options(signal: AbortSignal): Promise<SessionImportResult<SessionImportOptionsValue>>',
-        description: 'Current provider/workspace/preset choices for the confirmation screen.',
+        description: 'Current source/workspace/preset/model choices for the confirmation screen.',
         parameters: [{ name: 'signal', description: 'Remote request cancellation signal.' }],
         returns: 'Available source kinds and explicit continuation targets.',
       },
@@ -1030,7 +1030,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote(\'commit\') commit( request: SessionImportCommitRequest, signal: AbortSignal, ): Promise<SessionImportResult<SessionImportCommitValue>>',
-        description: 'Atomically publish after explicit workspace and preset confirmation.',
+        description: 'Atomically publish after explicit workspace, preset, and model confirmation.',
         parameters: [{ name: 'request', description: 'Reservation and confirmed continuation targets.' }, { name: 'signal', description: 'Remote request cancellation signal.' }],
         returns: 'Published session identity and idempotency/attachment status.',
       },
@@ -3116,12 +3116,8 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ForeignSessionCaptureLimits {\n    readonly maxSourceBytes: number;\n    readonly maxLineBytes: number;\n    readonly maxVisibleContextBytes: number;\n    readonly maxVisibleMessages: number;\n    readonly maxToolActivities: number;\n}',
   },
   {
-    name: 'ForeignSessionCaptureProgress',
-    declaration: 'export interface ForeignSessionCaptureProgress {\n    readonly phase: \'reading\' | \'validating\' | \'converting\';\n    readonly completedBytes: number;\n    readonly totalBytes: number;\n}',
-  },
-  {
     name: 'ForeignSessionCaptureRequest',
-    declaration: 'export interface ForeignSessionCaptureRequest {\n    readonly sourceSessionId: string;\n    readonly limits: ForeignSessionCaptureLimits;\n    readonly signal?: AbortSignal;\n    readonly onProgress?: (progress: ForeignSessionCaptureProgress) => void;\n}',
+    declaration: 'export interface ForeignSessionCaptureRequest {\n    readonly sourceSessionId: string;\n    readonly limits: ForeignSessionCaptureLimits;\n    readonly signal?: AbortSignal;\n}',
   },
   {
     name: 'ForeignSessionProvenance',
@@ -3913,7 +3909,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionImportCommitRequest',
-    declaration: 'export interface SessionImportCommitRequest {\n    readonly reservationId: string;\n    readonly workspaceId: string;\n    readonly agentPreset: string;\n}',
+    declaration: 'export interface SessionImportCommitRequest {\n    readonly reservationId: string;\n    readonly workspaceId: string;\n    readonly agentPreset: string;\n    readonly provider: string;\n    readonly model: string;\n}',
   },
   {
     name: 'SessionImportCommitValue',
@@ -3940,8 +3936,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionImportFailure {\n    readonly code: SessionImportSourceErrorCode | \'reservation-not-found\' | \'workspace-not-found\' | \'preset-not-found\' | \'preset-unavailable\' | \'target-conflict\' | \'cancelled\' | \'internal\';\n    readonly message: string;\n    readonly sourceKind?: SessionImportSourceKind;\n    readonly record?: number;\n}',
   },
   {
+    name: 'SessionImportModelOption',
+    declaration: 'export interface SessionImportModelOption {\n    readonly provider: string;\n    readonly model: string;\n    readonly name: string;\n    readonly contextWindow: number;\n    readonly usableImportTokens: number;\n}',
+  },
+  {
     name: 'SessionImportOptionsValue',
-    declaration: 'export interface SessionImportOptionsValue {\n    readonly sourceKinds: readonly SessionImportSourceKind[];\n    readonly workspaces: readonly SessionImportWorkspaceOption[];\n    readonly presets: readonly SessionImportPresetOption[];\n}',
+    declaration: 'export interface SessionImportOptionsValue {\n    readonly sourceKinds: readonly SessionImportSourceKind[];\n    readonly workspaces: readonly SessionImportWorkspaceOption[];\n    readonly presets: readonly SessionImportPresetOption[];\n    readonly models: readonly SessionImportModelOption[];\n}',
   },
   {
     name: 'SessionImportPresetOption',

@@ -1,4 +1,9 @@
 .section {
+  /* The sheet contains scrolling source rows beside l3 safety/preview cards;
+     bind the inherited themed scrollbar pair to the elevated surface. */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+
   display: flex;
   flex-direction: column;
   gap: 18px;

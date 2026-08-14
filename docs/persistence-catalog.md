@@ -643,7 +643,7 @@ Source: [`packages/core/session/src/types.ts:332`](../packages/core/session/src/
 'session/imported': SessionImportedEventData
 ```
 
-Source: [`packages/session-import/session-import-local/src/index.ts:57`](../packages/session-import/session-import-local/src/index.ts)
+Source: [`packages/session-import/session-import-local/src/index.ts:62`](../packages/session-import/session-import-local/src/index.ts)
 
 <a id="sessiontitle--log-only"></a>
 

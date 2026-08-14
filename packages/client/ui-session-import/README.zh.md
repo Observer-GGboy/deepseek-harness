@@ -2,9 +2,9 @@
 
 [English](README.md) | 中文
 
-用于导入本地 Codex 与 Claude Code Session 的 Web Settings 消费方。该分节要求用户显式选择来源类型并触发发现，只列出元数据；随后捕获一个被选中的来源，预览计数和可选 cwd 提示，并要求同时确认 Workspace 与 Agent 预设后才能提交。
+用于导入本地 Codex 与 Claude Code Session 的 Web Settings 消费方。该分节要求用户显式选择来源类型并触发发现，只列出元数据；随后捕获一个被选中的来源，预览计数和可选 cwd 提示，并要求同时确认 Workspace、Agent 预设与精确继续模型后才能提交。每个模型选项都会显示 Host 计算出的安全导入 token 额度。
 
-UI 永远不会接收或渲染消息文本、工具参数／结果、来源 transcript 路径、文件身份、凭据或预留内容。捕获与提交使用 `AbortSignal`；更换来源或离开页面会丢弃未提交的预留。发布后，Client 刷新 Session 列表并打开确定性的导入 Session。
+UI 永远不会接收或渲染消息文本、工具参数／结果、来源 transcript 路径、文件身份、凭据或预留内容。捕获与提交使用 `AbortSignal`；更换来源或离开页面会丢弃未提交的预留。v1 进度约定刻意只报告有界的本地阶段——查找、读取／校验与原子发布——不暴露未经验证的字节计数。发布后，Client 刷新 Session 列表并打开确定性的导入 Session。
 
 ## 模型体验
 
@@ -16,7 +16,7 @@ UI 自身不添加模型内容。经其确认的 Host 提交会创建 `dsh-sessi
 
 #### Token 影响
 
-提交前不影响 token。下一次模型请求会计入导入 Session 保留的上下文。
+提交前不影响 token。发布前，Host 会把完整导入 seed 连同所选预设组装出的系统提示词和工具一起计量，并与所选模型的安全额度比较。下一次模型请求会计入保留的上下文。
 
 #### KV Cache 影响
 

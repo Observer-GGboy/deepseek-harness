@@ -22,13 +22,6 @@ export interface ForeignSessionCandidate {
   readonly modifiedAt: number
 }
 
-/** Bounded progress for a selected source capture. */
-export interface ForeignSessionCaptureProgress {
-  readonly phase: 'reading' | 'validating' | 'converting'
-  readonly completedBytes: number
-  readonly totalBytes: number
-}
-
 /** Visible text retained from one foreign transcript message. */
 export interface ForeignVisibleMessage {
   readonly role: 'user' | 'assistant'
@@ -84,7 +77,6 @@ export interface ForeignSessionCaptureRequest {
   readonly sourceSessionId: string
   readonly limits: ForeignSessionCaptureLimits
   readonly signal?: AbortSignal
-  readonly onProgress?: (progress: ForeignSessionCaptureProgress) => void
 }
 
 /** Vendor-owned discovery and capture implementation. */

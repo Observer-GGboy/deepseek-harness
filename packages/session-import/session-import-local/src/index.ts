@@ -7,14 +7,19 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { isAbsolute } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import s from '@deepseek-ai/schemastery'
-import { freezeMessage, MessageId } from '@deepseek-ai/dsh-llm'
+import { freezeMessage, MessageId, type LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SessionEventMap, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { SESSION_FORMAT_VERSION, SessionId as brandSessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type {} from '@deepseek-ai/dsh-agent-presets'
+import type {} from '@deepseek-ai/dsh-token-meter'
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import {
   ForeignSessionImportError,
@@ -77,7 +82,7 @@ export interface Config extends ForeignSessionCaptureLimits {
 export const Config: s<Config> = s.object({
   maxSourceBytes: s.natural().min(1).default(64 * 1024 * 1024),
   maxLineBytes: s.natural().min(1).default(1024 * 1024),
-  maxVisibleContextBytes: s.natural().min(1).default(4 * 1024 * 1024),
+  maxVisibleContextBytes: s.natural().min(1).default(64 * 1024 * 1024),
   maxVisibleMessages: s.natural().min(1).default(10_000),
   maxToolActivities: s.natural().default(1_000),
   maxDiscoveryItems: s.natural().min(1).default(500),
@@ -85,15 +90,27 @@ export const Config: s<Config> = s.object({
   maxToolSummaryBytes: s.natural().min(1).default(64 * 1024),
 })
 
+interface ReservationTarget {
+  readonly workspaceId: string
+  readonly agentPreset: string
+  readonly provider: string
+  readonly model: string
+}
+
 interface Reservation {
   readonly id: string
   readonly snapshot: ForeignSessionSnapshot
   readonly insertedAt: number
-  chosen: { workspaceId: string; agentPreset: string } | undefined
+  chosen: ReservationTarget | undefined
   commit: Promise<SessionImportResult<SessionImportCommitValue>> | undefined
+  controller: AbortController | undefined
+  waiters: number
+  settled: boolean
 }
 
 const success = <T>(value: T): SessionImportResult<T> => Object.freeze({ ok: true, value: Object.freeze(value) })
+const WINNER_INSPECTION_ATTEMPTS = 50
+const WINNER_INSPECTION_DELAY_MS = 5
 const rejected = <T>(error: SessionImportFailure): SessionImportResult<T> =>
   Object.freeze({ ok: false, error: Object.freeze(error) })
 
@@ -162,12 +179,21 @@ function toolSummary(snapshot: ForeignSessionSnapshot, maxBytes: number): string
  * @param snapshot Validated provider-neutral snapshot.
  * @param header Confirmed native session header.
  * @param maxToolSummaryBytes Maximum UTF-8 bytes allowed for inert tool facts.
+ * @param continuation Confirmed model route and assembled request composition.
  * @returns Complete native seed events ready for atomic publication.
  */
 export function convertForeignSnapshot(
   snapshot: ForeignSessionSnapshot,
   header: SessionHeader,
   maxToolSummaryBytes: number,
+  continuation: {
+    readonly provider: string
+    readonly model: string
+    readonly contextWindow: number
+    readonly maxTokens?: number
+    readonly system?: string
+    readonly tools?: readonly ToolSchema[]
+  },
 ): SessionEvent[] {
   const events: SessionEvent[] = []
   const push = <Type extends keyof SessionEventMap>(
@@ -240,6 +266,27 @@ export function convertForeignSnapshot(
         : { kind: 'completed' },
     })
   })
+  push('request/header', {
+    header: {
+      config: {
+        provider: continuation.provider,
+        model: continuation.model,
+        ...continuation.maxTokens === undefined ? {} : { maxTokens: continuation.maxTokens },
+      },
+      ...continuation.system === undefined || continuation.system.length === 0
+        ? {}
+        : { system: continuation.system },
+      ...continuation.tools === undefined || continuation.tools.length === 0
+        ? {}
+        : { tools: [...continuation.tools] },
+    },
+    reason: 'change',
+  })
+  push('request/context', {
+    provider: continuation.provider,
+    model: continuation.model,
+    contextWindow: continuation.contextWindow,
+  }, { ignorable: true })
   return events
 }
 
@@ -250,10 +297,16 @@ function matchingImport(
   events: readonly SessionEvent[],
   cwd: string,
   preset: string,
+  provider: string,
+  model: string,
 ): boolean {
   if (header.cwd !== cwd || header.agentPreset !== preset) return false
   const imported = events.find(event => event.type === 'session/imported')
+  const continuation = [...events].reverse().find(event => event.type === 'request/header')
   if (imported?.type !== 'session/imported') return false
+  if (continuation?.type !== 'request/header'
+    || continuation.data.header.config.provider !== provider
+    || continuation.data.header.config.model !== model) return false
   return imported.data.sourceKind === snapshot.provenance.sourceKind
     && imported.data.sourceSessionId === snapshot.provenance.sourceSessionId
     && imported.data.prefixDigest === snapshot.provenance.prefixDigest
@@ -262,7 +315,10 @@ function matchingImport(
 
 /** Host Remote consumer. Providers remain separately registered on `ctx.sessionImports`. */
 export class LocalSessionImportService extends TypertRemoteService {
-  static inject = ['sessionImports', 'sessionPersistence', 'sessions', 'workspaceRegistry', 'agentPresets']
+  static inject = [
+    'sessionImports', 'sessionPersistence', 'sessions', 'workspaceRegistry',
+    'agentPresets', 'llm', 'tokenMeter', 'systemPrompt',
+  ]
   static Config = Config
   private readonly reservations = new Map<string, Reservation>()
   private accepting = true
@@ -271,12 +327,15 @@ export class LocalSessionImportService extends TypertRemoteService {
     super(ctx, 'sessionImportLocal')
     ctx.effect(() => () => {
       this.accepting = false
+      for (const reservation of this.reservations.values()) {
+        reservation.controller?.abort(new DOMException('Service disposed', 'AbortError'))
+      }
       this.reservations.clear()
     }, 'session-import-local.dispose')
   }
 
   /**
-   * Current provider/workspace/preset choices for the confirmation screen.
+   * Current source/workspace/preset/model choices for the confirmation screen.
    * @param signal Remote request cancellation signal.
    * @returns Available source kinds and explicit continuation targets.
    */
@@ -288,12 +347,32 @@ export class LocalSessionImportService extends TypertRemoteService {
         .filter(preset => preset.broken === undefined)
         .map(preset => ({ id: preset.id, name: preset.name ?? preset.id }))
       signal.throwIfAborted()
+      const models = []
+      for (const provider of this.ctx.llm.listProviders()) {
+        const listed = await this.ctx.llm.listModels(provider.id).catch(() => [])
+        for (const listedModel of listed) {
+          const info = await this.ctx.llm.resolveModelInfo(provider.id, listedModel.id, signal)
+            .catch(() => undefined)
+          if (info?.context === undefined) continue
+          const usableImportTokens = this.usableImportTokens(info)
+          if (usableImportTokens <= 0) continue
+          models.push({
+            provider: provider.id,
+            model: listedModel.id,
+            name: `${provider.name} — ${listedModel.name}`,
+            contextWindow: info.context.contextWindow,
+            usableImportTokens,
+          })
+        }
+      }
+      signal.throwIfAborted()
       return success({
         sourceKinds: this.ctx.sessionImports.listProviders(),
         workspaces: this.ctx.workspaceRegistry.list().map(workspace => ({
           id: String(workspace.id), title: workspace.title, path: workspace.path,
         })),
         presets,
+        models,
       })
     } catch (error) {
       return rejected(failure(error))
@@ -383,6 +462,9 @@ export class LocalSessionImportService extends TypertRemoteService {
         insertedAt: Date.now(),
         chosen: undefined,
         commit: undefined,
+        controller: undefined,
+        waiters: 0,
+        settled: false,
       })
       return success({
         reservationId: id,
@@ -402,7 +484,7 @@ export class LocalSessionImportService extends TypertRemoteService {
   }
 
   /**
-   * Atomically publish after explicit workspace and preset confirmation.
+   * Atomically publish after explicit workspace, preset, and model confirmation.
    * @param request Reservation and confirmed continuation targets.
    * @param signal Remote request cancellation signal.
    * @returns Published session identity and idempotency/attachment status.
@@ -416,29 +498,81 @@ export class LocalSessionImportService extends TypertRemoteService {
     if (reservation === undefined) {
       return Promise.resolve(rejected({ code: 'reservation-not-found', message: 'The captured import is no longer available.' }))
     }
+    if (signal.aborted) {
+      return Promise.resolve(rejected({ code: 'cancelled', message: 'Local session import was cancelled.' }))
+    }
     const chosen = reservation.chosen
     if (chosen !== undefined
-      && (chosen.workspaceId !== request.workspaceId || chosen.agentPreset !== request.agentPreset)) {
+      && (chosen.workspaceId !== request.workspaceId
+        || chosen.agentPreset !== request.agentPreset
+        || chosen.provider !== request.provider
+        || chosen.model !== request.model)) {
       return Promise.resolve(rejected({
         code: 'target-conflict',
         message: 'This captured import is already committing with different workspace or preset choices.',
       }))
     }
     if (reservation.commit === undefined) {
-      reservation.chosen = { workspaceId: request.workspaceId, agentPreset: request.agentPreset }
-      reservation.commit = this.commitReservation(reservation, request, signal)
+      reservation.chosen = {
+        workspaceId: request.workspaceId,
+        agentPreset: request.agentPreset,
+        provider: request.provider,
+        model: request.model,
+      }
+      reservation.controller = new AbortController()
+      reservation.settled = false
+      reservation.commit = this.commitReservation(reservation, request, reservation.controller.signal)
       reservation.commit.then((result) => {
+        reservation.settled = true
         if (result.ok) this.reservations.delete(reservation.id)
         else {
           reservation.commit = undefined
+          reservation.controller = undefined
           reservation.chosen = undefined
         }
       }).catch(() => {
+        reservation.settled = true
         reservation.commit = undefined
+        reservation.controller = undefined
         reservation.chosen = undefined
       })
     }
-    return reservation.commit
+    return this.watchCommit(reservation, signal)
+  }
+
+  /** Give each caller independent cancellation while one target commit stays single-flight. */
+  private watchCommit(
+    reservation: Reservation,
+    signal: AbortSignal,
+  ): Promise<SessionImportResult<SessionImportCommitValue>> {
+    const commit = reservation.commit
+    if (commit === undefined) {
+      return Promise.resolve(rejected({ code: 'internal', message: 'Local session import commit was not started.' }))
+    }
+    reservation.waiters += 1
+    return new Promise<SessionImportResult<SessionImportCommitValue>>((resolve) => {
+      let done = false
+      const finish = (value: SessionImportResult<SessionImportCommitValue>): void => {
+        if (done) return
+        done = true
+        signal.removeEventListener('abort', cancelled)
+        resolve(value)
+      }
+      const cancelled = (): void => {
+        finish(rejected({ code: 'cancelled', message: 'Local session import was cancelled.' }))
+      }
+      signal.addEventListener('abort', cancelled, { once: true })
+      void commit.then(finish, () => {
+        finish(rejected({
+          code: 'internal', message: 'Local session import failed without publishing a partial session.',
+        }))
+      })
+    }).finally(() => {
+      reservation.waiters -= 1
+      if (reservation.waiters === 0 && !reservation.settled) {
+        reservation.controller?.abort(new DOMException('All commit callers cancelled', 'AbortError'))
+      }
+    })
   }
 
   /**
@@ -474,17 +608,38 @@ export class LocalSessionImportService extends TypertRemoteService {
         return rejected({ code: 'preset-unavailable', message: 'The selected Agent preset is currently unavailable.' })
       }
       signal.throwIfAborted()
+      let model: LlmResolvedModelInfo
+      try {
+        model = await this.ctx.llm.resolveModelInfo(request.provider, request.model, signal)
+      } catch {
+        return rejected({ code: 'target-conflict', message: 'Select an available continuation model again.' })
+      }
+      if (model.context === undefined) {
+        return rejected({
+          code: 'context-too-large',
+          message: 'The selected model does not publish a context window, so this import cannot be sized safely.',
+        })
+      }
+      const usableImportTokens = this.usableImportTokens(model)
+      if (usableImportTokens <= 0) {
+        return rejected({
+          code: 'context-too-large',
+          message: 'The selected model leaves no safe budget for imported context.',
+        })
+      }
       const snapshot = reservation.snapshot
       const sessionId = importedSessionId(snapshot)
       const existing = await this.inspectExisting(sessionId)
       if (existing !== undefined) {
-        if (!matchingImport(snapshot, existing.meta, existing.events, workspace.path, preset.id)) {
+        if (!matchingImport(
+          snapshot, existing.meta, existing.events, workspace.path, preset.id, model.provider, model.id,
+        )) {
           return rejected({ code: 'target-conflict', message: 'The deterministic import target already contains different data.' })
         }
         const workspaceAttached = await workspace.attachSession(sessionId).then(() => true, () => false)
         return success({ sessionId, existing: true, workspaceAttached })
       }
-      if (this.ctx.sessions.get(sessionId) !== undefined) {
+      if (this.targetIsLive(sessionId)) {
         return rejected({ code: 'target-conflict', message: 'The import target became live before publication.' })
       }
       const header: SessionHeader = {
@@ -494,13 +649,47 @@ export class LocalSessionImportService extends TypertRemoteService {
         cwd: workspace.path,
         agentPreset: preset.id,
       }
-      const raw = convertForeignSnapshot(snapshot, header, this.config.maxToolSummaryBytes)
+      const continuation = {
+        provider: model.provider,
+        model: model.id,
+        contextWindow: model.context.contextWindow,
+        ...model.defaultMaxTokens === undefined ? {} : { maxTokens: model.defaultMaxTokens },
+      }
+      const draft = this.ctx.sessions.prepare(sessionId, {
+        seed: convertForeignSnapshot(snapshot, header, this.config.maxToolSummaryBytes, continuation),
+        meta: header,
+      })
+      const scope = await this.ctx.agentPresets.standingKeyFor(preset.id)
+      const assembly = await this.ctx.systemPrompt.assemble({
+        scope,
+        signal,
+        agent: {
+          id: sessionId,
+          options: { provider: model.provider, model: model.id },
+          session: draft,
+          ctx: this.ctx,
+          status: 'idle',
+        } as unknown as Agent,
+      })
+      signal.throwIfAborted()
+      const raw = convertForeignSnapshot(snapshot, header, this.config.maxToolSummaryBytes, {
+        ...continuation,
+        system: renderPrompt(assembly),
+        tools: assembly.tools,
+      })
       // SessionStore owns exact seed-envelope and surface validation. The
       // detached value is never entered or announced.
       const prepared = this.ctx.sessions.prepare(sessionId, { seed: raw, meta: header })
+      const measured = this.ctx.tokenMeter.measure(prepared)
+      if (measured.totalTokens > usableImportTokens) {
+        return rejected({
+          code: 'context-too-large',
+          message: `Imported context requires ${measured.totalTokens} estimated tokens; the selected model allows ${usableImportTokens}. Choose another model or cancel.`,
+        })
+      }
       const events = [...prepared.events]
       signal.throwIfAborted()
-      if (this.ctx.sessions.get(sessionId) !== undefined) {
+      if (this.targetIsLive(sessionId)) {
         return rejected({ code: 'target-conflict', message: 'The import target became live before publication.' })
       }
       try {
@@ -510,15 +699,17 @@ export class LocalSessionImportService extends TypertRemoteService {
         // contenders can already have materialized. The first append below is
         // the atomic claim, and inspection after a rejection proves the winner.
       }
-      if (this.ctx.sessions.get(sessionId) !== undefined) {
+      if (this.targetIsLive(sessionId)) {
         return rejected({ code: 'target-conflict', message: 'The import target became live before publication.' })
       }
       try {
         await this.ctx.sessionPersistence.append(sessionId, events)
       } catch {
-        const won = await this.inspectExisting(sessionId)
+        const won = await this.inspectDurableWinner(sessionId, signal)
         if (won === undefined
-          || !matchingImport(snapshot, won.meta, won.events, workspace.path, preset.id)) {
+          || !matchingImport(
+            snapshot, won.meta, won.events, workspace.path, preset.id, model.provider, model.id,
+          )) {
           return rejected({ code: 'target-conflict', message: 'Another writer claimed the import target with different data.' })
         }
         const workspaceAttached = await workspace.attachSession(sessionId).then(() => true, () => false)
@@ -533,6 +724,14 @@ export class LocalSessionImportService extends TypertRemoteService {
     }
   }
 
+  /** Reserve output plus preset/tool/new-prompt headroom from one exact model. */
+  private usableImportTokens(info: LlmResolvedModelInfo): number {
+    const contextWindow = info.context?.contextWindow ?? 0
+    const outputReserve = info.defaultMaxTokens ?? Math.max(1, Math.floor(contextWindow * 0.1))
+    const compositionReserve = Math.max(4_096, Math.ceil(contextWindow * 0.1))
+    return contextWindow - outputReserve - compositionReserve
+  }
+
   private async inspectExisting(sessionId: SessionId): Promise<{
     meta: SessionHeader
     events: readonly SessionEvent[]
@@ -542,6 +741,27 @@ export class LocalSessionImportService extends TypertRemoteService {
     } catch {
       return undefined
     }
+  }
+
+  /** Allow a concurrent process's atomic publication to become observable. */
+  private async inspectDurableWinner(sessionId: SessionId, signal: AbortSignal): Promise<{
+    meta: SessionHeader
+    events: readonly SessionEvent[]
+  } | undefined> {
+    for (let attempt = 0; attempt < WINNER_INSPECTION_ATTEMPTS; attempt += 1) {
+      signal.throwIfAborted()
+      const existing = await this.inspectExisting(sessionId)
+      if (existing !== undefined) return existing
+      if (attempt + 1 < WINNER_INSPECTION_ATTEMPTS) {
+        await delay(WINNER_INSPECTION_DELAY_MS, undefined, { signal })
+      }
+    }
+    return undefined
+  }
+
+  /** Same-process publication race check, kept separate from durable inspection. */
+  private targetIsLive(sessionId: SessionId): boolean {
+    return this.ctx.sessions.get(sessionId) !== undefined
   }
 
   /** Re-check provider output before it can enter reservations or persistence. */

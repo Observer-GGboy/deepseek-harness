@@ -64,6 +64,7 @@ export function SessionImportSection(props: SessionImportSectionProps): ReactNod
   const [snapshot, setSnapshot] = useState<SessionImportCaptureValue | null>(null)
   const [workspaceId, setWorkspaceId] = useState('')
   const [preset, setPreset] = useState('')
+  const [modelRoute, setModelRoute] = useState('')
   const [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState<Busy>('options')
   const [error, setError] = useState<string | null>(null)
@@ -116,8 +117,14 @@ export function SessionImportSection(props: SessionImportSectionProps): ReactNod
       if (firstKind !== undefined) setKind(firstKind)
       const firstWorkspace = result.value.workspaces[0]
       const firstPreset = result.value.presets[0]
+      const firstModel = result.value.models[0]
       if (firstWorkspace !== undefined) setWorkspaceId(firstWorkspace.id)
       if (firstPreset !== undefined) setPreset(firstPreset.id)
+      if (firstModel !== undefined) setModelRoute(`${firstModel.provider}\0${firstModel.model}`)
+    }).catch(() => {
+      if (!current) return
+      setBusy(null)
+      setError(t('loadFailed'))
     })
     return () => {
       current = false
@@ -150,6 +157,7 @@ export function SessionImportSection(props: SessionImportSectionProps): ReactNod
   }
 
   const readSnapshot = async (): Promise<void> => {
+    /* v8 ignore next -- the capture button is disabled until a source id is selected. */
     if (selected === '') return
     clearSnapshot()
     const value = await run('capture', signal => capture({
@@ -164,11 +172,15 @@ export function SessionImportSection(props: SessionImportSectionProps): ReactNod
   }
 
   const publish = async (): Promise<void> => {
-    if (snapshot === null || !confirmed || workspaceId === '' || preset === '') return
+    const model = optionValue?.models.find(option => `${option.provider}\0${option.model}` === modelRoute)
+    /* v8 ignore next -- the import button mirrors every confirmation precondition. */
+    if (snapshot === null || !confirmed || workspaceId === '' || preset === '' || model === undefined) return
     const value = await run('commit', signal => commit({
       reservationId: snapshot.reservationId,
       workspaceId,
       agentPreset: preset,
+      provider: model.provider,
+      model: model.model,
     }, signal))
     if (value === null) return
     reservation.current = null
@@ -287,6 +299,20 @@ export function SessionImportSection(props: SessionImportSectionProps): ReactNod
             </select>
           </label>
           <label className={css.control}>
+            <span>{t('model')}</span>
+            <select value={modelRoute} onChange={(event) => {
+              setModelRoute(event.currentTarget.value)
+              setConfirmed(false)
+            }}>
+              <option value="">{t('chooseModel')}</option>
+              {optionValue?.models.map(option => (
+                <option key={`${option.provider}\0${option.model}`} value={`${option.provider}\0${option.model}`}>
+                  {option.name} — {option.usableImportTokens.toLocaleString()} {t('tokensAvailable')}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={css.control}>
             <span>{t('preset')}</span>
             <select value={preset} onChange={(event) => {
               setPreset(event.currentTarget.value)
@@ -309,7 +335,7 @@ export function SessionImportSection(props: SessionImportSectionProps): ReactNod
           <button
             className={css.primaryButton}
             type="button"
-            disabled={!confirmed || workspaceId === '' || preset === '' || waiting}
+            disabled={!confirmed || workspaceId === '' || preset === '' || modelRoute === '' || waiting}
             onClick={() => { void publish() }}
           >
             {busy === 'commit' ? t('importing') : t('import')}

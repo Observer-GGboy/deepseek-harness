@@ -25,6 +25,8 @@ export const inject = ['sessionImports']
 const SOURCE_KIND = 'claude-code' as const
 const CONVERTER_VERSION = 'claude-transcript-v1'
 const DEFAULT_MAX_CANDIDATES = 500
+const MIN_SUPPORTED_VERSION = [2, 1, 128] as const
+const MAX_SUPPORTED_VERSION = [2, 1, 222] as const
 
 /** Local Claude Code source configuration. */
 export interface Config {
@@ -42,6 +44,35 @@ export const Config: s<Config> = s.object({
 type RecordMap = Record<string, unknown>
 const isRecord = (value: unknown): value is RecordMap =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
+
+function versionParts(version: string): readonly [number, number, number] | undefined {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/u.exec(version)
+  if (match === null) return undefined
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+function compareVersion(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): number {
+  for (const index of [0, 1, 2] as const) {
+    const difference = left[index] - right[index]
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
+function assertSupportedVersion(version: string, record: number): void {
+  const parsed = versionParts(version)
+  if (parsed === undefined
+    || compareVersion(parsed, MIN_SUPPORTED_VERSION) < 0
+    || compareVersion(parsed, MAX_SUPPORTED_VERSION) > 0) {
+    throw new ForeignSessionImportError(
+      'unsupported-version', SOURCE_KIND, record,
+      `claude-code version ${version} at record ${record} is unsupported`,
+    )
+  }
+}
 
 /**
  * Extract the session identity from a supported Claude transcript basename.
@@ -61,9 +92,10 @@ interface PendingMessage extends ForeignVisibleMessage {
 /** Selected-file parser. System/developer content is always excluded. */
 class ClaudeCaptureParser {
   readonly accumulator: ForeignSnapshotAccumulator
-  sourceVersion = 'unknown'
+  sourceVersion = ''
   cwdHint: string | undefined
   private sessionIdSeen = false
+  private readonly versions = new Set<string>()
   private readonly recordIds = new Map<string, { kind: string; messageIndex?: number }>()
   private readonly messages: PendingMessage[] = []
   private readonly toolIndexes = new Map<string, number>()
@@ -101,6 +133,7 @@ class ClaudeCaptureParser {
       case 'custom-title':
       case 'mode':
       case 'pr-link':
+      case 'frame-link':
         // Hidden instructions, usage/progress, and file snapshots are not
         // visible transcript context and cannot be imported.
         return
@@ -118,6 +151,12 @@ class ClaudeCaptureParser {
         'source-corrupt', SOURCE_KIND, undefined, 'claude-code source has no matching session identity',
       )
     }
+    if (this.versions.size === 0) {
+      throw new ForeignSessionImportError(
+        'unsupported-version', SOURCE_KIND, undefined,
+        'claude-code version unknown is unsupported',
+      )
+    }
     for (const message of this.messages) {
       this.accumulator.message(message, message.record)
     }
@@ -131,13 +170,11 @@ class ClaudeCaptureParser {
     }
     const version = row['version']
     if (typeof version === 'string') {
-      if (this.sourceVersion !== 'unknown' && this.sourceVersion !== version) {
-        throw new ForeignSessionImportError(
-          'unsupported-version', SOURCE_KIND, record,
-          `claude-code record ${record} changes transcript version`,
-        )
-      }
-      this.sourceVersion = version
+      assertSupportedVersion(version, record)
+      this.versions.add(version)
+      const ordered = [...this.versions].sort((left, right) =>
+        left.localeCompare(right, 'en', { numeric: true }))
+      this.sourceVersion = ordered.length === 1 ? version : `${ordered[0]}..${ordered.at(-1)}`
     }
     const cwd = row['cwd']
     if (typeof cwd === 'string' && isAbsolute(cwd)) this.cwdHint = resolve(cwd)
@@ -234,6 +271,7 @@ class ClaudeCaptureParser {
           const index = id === undefined ? undefined : this.toolIndexes.get(id)
           if (index !== undefined) {
             const previous = this.accumulator.tools[index]
+            /* v8 ignore next -- the index comes from the append-only tool array at registration. */
             if (previous !== undefined) {
               this.accumulator.tools[index] = Object.freeze({
                 ...previous,
@@ -327,11 +365,9 @@ export class ClaudeCodeSessionImportProvider implements ForeignSessionProvider {
       maxSourceBytes: request.limits.maxSourceBytes,
       maxLineBytes: request.limits.maxLineBytes,
       ...request.signal === undefined ? {} : { signal: request.signal },
-      ...request.onProgress === undefined ? {} : { onProgress: request.onProgress },
       onRecord: (record) => { parser.parse(record) },
     })
     parser.finish()
-    request.onProgress?.({ phase: 'converting', completedBytes: capture.capturedBytes, totalBytes: capture.capturedBytes })
     return Object.freeze({
       provenance: Object.freeze({
         sourceKind: SOURCE_KIND,
@@ -356,5 +392,3 @@ export class ClaudeCodeSessionImportProvider implements ForeignSessionProvider {
 export function apply(ctx: Context, config: Config): void {
   ctx.sessionImports.registerProvider(new ClaudeCodeSessionImportProvider(config))
 }
-
-export default apply

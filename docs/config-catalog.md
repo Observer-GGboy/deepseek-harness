@@ -1560,7 +1560,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/session-import/session-import-claude-code/src/index.ts:30`](../packages/session-import/session-import-claude-code/src/index.ts)
+Source: [`packages/session-import/session-import-claude-code/src/index.ts:32`](../packages/session-import/session-import-claude-code/src/index.ts)
 
 <a id="deepseek-aidsh-session-import-codex"></a>
 
@@ -1578,13 +1578,13 @@ export interface Config {
 }
 ```
 
-Source: [`packages/session-import/session-import-codex/src/index.ts:29`](../packages/session-import/session-import-codex/src/index.ts)
+Source: [`packages/session-import/session-import-codex/src/index.ts:31`](../packages/session-import/session-import-codex/src/index.ts)
 
 <a id="deepseek-aidsh-session-import-local"></a>
 
 ## `@deepseek-ai/dsh-session-import-local`
 
-Requires: `sessionImports` · `sessionPersistence` · `sessions` · `workspaceRegistry` · `agentPresets`
+Requires: `sessionImports` · `sessionPersistence` · `sessions` · `workspaceRegistry` · `agentPresets` · `llm` · `tokenMeter` · `systemPrompt`
 
 ```ts config-catalog
 /** Required import budgets and reservation ownership. */
@@ -1600,7 +1600,7 @@ export interface Config extends ForeignSessionCaptureLimits {
 
 Depends on: [`ForeignSessionCaptureLimits`](../packages/session-import/session-import/src/index.ts)
 
-Source: [`packages/session-import/session-import-local/src/index.ts:68`](../packages/session-import/session-import-local/src/index.ts)
+Source: [`packages/session-import/session-import-local/src/index.ts:73`](../packages/session-import/session-import-local/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 

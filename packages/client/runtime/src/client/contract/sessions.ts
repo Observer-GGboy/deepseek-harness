@@ -40,6 +40,12 @@ export interface ISessions {
    */
   open(id: SessionId): void
   /**
+   * Pull a fresh Host session baseline. Feature flows that materialize a cold
+   * Session without a live `session/created` frame call this before `open()`.
+   * @returns completion of the shared in-flight refresh.
+   */
+  refresh(): Promise<void>
+  /**
    * Open a healthy catalog child through its exact direct-parent address.
    * @param address - catalog-derived parent and child ids.
    */

@@ -634,6 +634,17 @@ Source: [`packages/schedule/schedule/src/types.ts:219`](../packages/schedule/sch
 
 Source: [`packages/core/session/src/types.ts:332`](../packages/core/session/src/types.ts)
 
+<a id="sessionimported--log-only"></a>
+
+#### `session/imported` — log-only
+
+```ts persistence-catalog
+/** Safe origin facts for one immutable foreign snapshot; never model-visible. */
+'session/imported': SessionImportedEventData
+```
+
+Source: [`packages/session-import/session-import-local/src/index.ts:57`](../packages/session-import/session-import-local/src/index.ts)
+
 <a id="sessiontitle--log-only"></a>
 
 #### `session/title` — log-only

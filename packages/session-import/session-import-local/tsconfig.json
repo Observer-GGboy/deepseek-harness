@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "lib/types" },
+  "include": ["src"],
+  "references": [
+    { "path": "../../../vendor/cordis" },
+    { "path": "../../../vendor/schemastery" },
+    { "path": "../../llm/llm" },
+    { "path": "../../core/session" },
+    { "path": "../../session/session-persistence" },
+    { "path": "../../workspace/workspace" },
+    { "path": "../../preset/agent-presets" },
+    { "path": "../../typert/protocol" },
+    { "path": "../session-import" },
+    { "path": "../../runtime-diagnostics/invariants" }
+  ]
+}

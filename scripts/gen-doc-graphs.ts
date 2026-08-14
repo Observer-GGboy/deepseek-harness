@@ -171,6 +171,23 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Backends persist the same SessionEvent vocabulary; apps choose a backend at composition time.',
   },
   {
+    key: 'sessionImports',
+    pkg: 'session-import',
+    title: 'Foreign session parser registry',
+    mode: 'seam',
+    implementations: ['session-import-codex', 'session-import-claude-code'],
+    consumers: ['session-import-local'],
+    note: 'Source providers discover metadata and reduce stable local JSONL prefixes to a bounded neutral snapshot; the consumer alone converts and persists native events.',
+  },
+  {
+    key: 'sessionImportLocal',
+    pkg: 'session-import-local',
+    title: 'Local session import workflow',
+    mode: 'core',
+    consumers: [],
+    note: 'Owns opaque capture reservations, explicit continuation-target confirmation, deterministic native conversion, and atomic idempotent publication behind the Remote API.',
+  },
+  {
     key: 'settings',
     pkg: 'settings',
     title: 'User-settings seam',

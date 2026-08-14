@@ -34,6 +34,9 @@
       "path": "../../feedback/message-feedback"
     },
     {
+      "path": "../../session-import/session-import-local"
+    },
+    {
       "path": "../../host/plugin-inventory"
     },
     {

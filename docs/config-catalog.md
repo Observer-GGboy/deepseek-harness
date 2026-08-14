@@ -1544,6 +1544,64 @@ Depends on: `Readable` (`node:stream`) · `Writable` (`node:stream`)
 
 Source: [`packages/sdk/server/src/index.ts:25`](../packages/sdk/server/src/index.ts)
 
+<a id="deepseek-aidsh-session-import-claude-code"></a>
+
+## `@deepseek-ai/dsh-session-import-claude-code`
+
+Requires: `sessionImports`
+
+```ts config-catalog
+/** Local Claude Code source configuration. */
+export interface Config {
+  /** Explicit supported root; defaults to the official projects root. */
+  root?: string
+  /** Maximum metadata rows returned by one discovery. */
+  maxCandidates?: number
+}
+```
+
+Source: [`packages/session-import/session-import-claude-code/src/index.ts:30`](../packages/session-import/session-import-claude-code/src/index.ts)
+
+<a id="deepseek-aidsh-session-import-codex"></a>
+
+## `@deepseek-ai/dsh-session-import-codex`
+
+Requires: `sessionImports`
+
+```ts config-catalog
+/** Local Codex source configuration. */
+export interface Config {
+  /** Explicit supported root; defaults to the official local sessions root. */
+  root?: string
+  /** Maximum metadata rows returned by one discovery. */
+  maxCandidates?: number
+}
+```
+
+Source: [`packages/session-import/session-import-codex/src/index.ts:29`](../packages/session-import/session-import-codex/src/index.ts)
+
+<a id="deepseek-aidsh-session-import-local"></a>
+
+## `@deepseek-ai/dsh-session-import-local`
+
+Requires: `sessionImports` · `sessionPersistence` · `sessions` · `workspaceRegistry` · `agentPresets`
+
+```ts config-catalog
+/** Required import budgets and reservation ownership. */
+export interface Config extends ForeignSessionCaptureLimits {
+  /** Maximum metadata rows returned to one discovery request. */
+  readonly maxDiscoveryItems: number
+  /** Maximum retained selected snapshots across tabs. */
+  readonly maxReservations: number
+  /** Maximum UTF-8 bytes of the inert historical-tool summary. */
+  readonly maxToolSummaryBytes: number
+}
+```
+
+Depends on: [`ForeignSessionCaptureLimits`](../packages/session-import/session-import/src/index.ts)
+
+Source: [`packages/session-import/session-import-local/src/index.ts:68`](../packages/session-import/session-import-local/src/index.ts)
+
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 
 ## `@deepseek-ai/dsh-session-persistence-jsonl`
@@ -3046,6 +3104,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-client-ui-model-selection` ([`packages/client/ui-model-selection/src/index.ts`](../packages/client/ui-model-selection/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-permission-presets` ([`packages/client/ui-permission-presets/src/index.ts`](../packages/client/ui-permission-presets/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-plan` ([`packages/client/ui-plan/src/index.ts`](../packages/client/ui-plan/src/index.ts))
+- `@deepseek-ai/dsh-client-ui-session-import` ([`packages/client/ui-session-import/src/index.ts`](../packages/client/ui-session-import/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-settings` ([`packages/client/ui-settings/src/index.ts`](../packages/client/ui-settings/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-settings-general` ([`packages/client/ui-settings-general/src/index.ts`](../packages/client/ui-settings-general/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-settings-models` ([`packages/client/ui-settings-models/src/index.ts`](../packages/client/ui-settings-models/src/index.ts))
@@ -3076,6 +3135,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-schedule` — requires `agents` · `sessions` · `tools` · `sessionPersistence` ([`packages/schedule/schedule/src/index.ts`](../packages/schedule/schedule/src/index.ts))
 - `@deepseek-ai/dsh-session` ([`packages/core/session/src/index.ts`](../packages/core/session/src/index.ts))
 - `@deepseek-ai/dsh-session-checkpoint-policy` — requires `llm` · `sessionPersistence` · `sessions` · `tools` ([`packages/session/session-checkpoint-policy/src/index.ts`](../packages/session/session-checkpoint-policy/src/index.ts))
+- `@deepseek-ai/dsh-session-import` ([`packages/session-import/session-import/src/index.ts`](../packages/session-import/session-import/src/index.ts))
 - `@deepseek-ai/dsh-session-log-export` — requires `commands` ([`packages/session-query/session-log-export/src/index.ts`](../packages/session-query/session-log-export/src/index.ts))
 - `@deepseek-ai/dsh-session-projection` ([`packages/session/session-projection/src/index.ts`](../packages/session/session-projection/src/index.ts))
 - `@deepseek-ai/dsh-session-stats` — requires `sessionProjections` ([`packages/session/session-stats/src/index.ts`](../packages/session/session-stats/src/index.ts))

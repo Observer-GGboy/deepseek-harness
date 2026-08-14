@@ -1006,6 +1006,68 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'sessionImportLocal',
+    summary: 'Host Remote consumer.',
+    description: 'Host Remote consumer. Providers remain separately registered on `ctx.sessionImports`.',
+    methods: [
+      {
+        signature: '@Remote(\'options\') async options(signal: AbortSignal): Promise<SessionImportResult<SessionImportOptionsValue>>',
+        description: 'Current provider/workspace/preset choices for the confirmation screen.',
+        parameters: [{ name: 'signal', description: 'Remote request cancellation signal.' }],
+        returns: 'Available source kinds and explicit continuation targets.',
+      },
+      {
+        signature: '@Remote(\'discover\') async discover( request: SessionImportDiscoverRequest, signal: AbortSignal, ): Promise<SessionImportResult<SessionImportDiscoverValue>>',
+        description: 'Metadata-only discovery for one explicitly chosen provider.',
+        parameters: [{ name: 'request', description: 'Chosen source kind.' }, { name: 'signal', description: 'Remote request cancellation signal.' }],
+        returns: 'Bounded source metadata rows without transcript content.',
+      },
+      {
+        signature: '@Remote(\'capture\') async capture( request: SessionImportCaptureRequest, signal: AbortSignal, ): Promise<SessionImportResult<SessionImportCaptureValue>>',
+        description: 'Capture a selected stable prefix behind an opaque reservation.',
+        parameters: [{ name: 'request', description: 'Explicitly selected source identity.' }, { name: 'signal', description: 'Remote request cancellation signal.' }],
+        returns: 'Sanitized counts and an opaque one-shot reservation identity.',
+      },
+      {
+        signature: '@Remote(\'commit\') commit( request: SessionImportCommitRequest, signal: AbortSignal, ): Promise<SessionImportResult<SessionImportCommitValue>>',
+        description: 'Atomically publish after explicit workspace and preset confirmation.',
+        parameters: [{ name: 'request', description: 'Reservation and confirmed continuation targets.' }, { name: 'signal', description: 'Remote request cancellation signal.' }],
+        returns: 'Published session identity and idempotency/attachment status.',
+      },
+      {
+        signature: '@Remote(\'discard\') discard(request: SessionImportDiscardRequest): SessionImportResult<SessionImportDiscardValue>',
+        description: 'Release an uncommitted capture.',
+        parameters: [{ name: 'request', description: 'Opaque reservation identity to discard.' }],
+        returns: 'Whether an uncommitted reservation was removed.',
+      },
+    ],
+  },
+  {
+    key: 'sessionImports',
+    summary: 'Registry of source-format providers.',
+    description: 'Registry of source-format providers. It performs no persistence or conversion.',
+    methods: [
+      {
+        signature: 'registerProvider(provider: ForeignSessionProvider): () => void',
+        description: 'Register one source kind for the lifetime of the calling effect.',
+        parameters: [{ name: 'provider', description: 'Provider implementation to register.' }],
+        returns: 'Effect disposer that unregisters the provider.',
+      },
+      {
+        signature: 'getProvider(kind: ForeignSessionSourceKind): ForeignSessionProvider | undefined',
+        description: 'Return one registered provider without choosing a fallback.',
+        parameters: [{ name: 'kind', description: 'Exact source kind to resolve.' }],
+        returns: 'The registered provider, or `undefined` when unavailable.',
+      },
+      {
+        signature: 'listProviders(): ForeignSessionSourceKind[]',
+        description: 'Return source kinds in deterministic lexical order.',
+        parameters: [],
+        returns: 'Registered source kinds.',
+      },
+    ],
+  },
+  {
     key: 'sessionPersistence',
     summary: 'Durable append-only session storage.',
     description: 'Durable append-only session storage. Implementations preserve contiguous, losslessly JSON-serializable events; append resolves only after durability, and load balances a complete interrupted tail without rewriting committed events.',
@@ -3046,6 +3108,46 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface FinishReasonMap {\n    \'stop\': {\n        kind: \'stop\';\n    };\n    \'tool-calls\': {\n        kind: \'tool-calls\';\n    };\n    \'max-tokens\': {\n        kind: \'max-tokens\';\n    };\n    \'aborted\': {\n        kind: \'aborted\';\n        failure: LlmFailure;\n    };\n    \'error\': {\n        kind: \'error\';\n        failure: LlmFailure;\n    };\n}',
   },
   {
+    name: 'ForeignSessionCandidate',
+    declaration: 'export interface ForeignSessionCandidate {\n    readonly sourceKind: ForeignSessionSourceKind;\n    readonly sourceSessionId: string;\n    readonly sizeBytes: number;\n    readonly modifiedAt: number;\n}',
+  },
+  {
+    name: 'ForeignSessionCaptureLimits',
+    declaration: 'export interface ForeignSessionCaptureLimits {\n    readonly maxSourceBytes: number;\n    readonly maxLineBytes: number;\n    readonly maxVisibleContextBytes: number;\n    readonly maxVisibleMessages: number;\n    readonly maxToolActivities: number;\n}',
+  },
+  {
+    name: 'ForeignSessionCaptureProgress',
+    declaration: 'export interface ForeignSessionCaptureProgress {\n    readonly phase: \'reading\' | \'validating\' | \'converting\';\n    readonly completedBytes: number;\n    readonly totalBytes: number;\n}',
+  },
+  {
+    name: 'ForeignSessionCaptureRequest',
+    declaration: 'export interface ForeignSessionCaptureRequest {\n    readonly sourceSessionId: string;\n    readonly limits: ForeignSessionCaptureLimits;\n    readonly signal?: AbortSignal;\n    readonly onProgress?: (progress: ForeignSessionCaptureProgress) => void;\n}',
+  },
+  {
+    name: 'ForeignSessionProvenance',
+    declaration: 'export interface ForeignSessionProvenance {\n    readonly sourceKind: ForeignSessionSourceKind;\n    readonly sourceSessionId: string;\n    readonly sourceVersion: string;\n    readonly capturedAt: number;\n    readonly prefixDigest: string;\n    readonly converterVersion: string;\n}',
+  },
+  {
+    name: 'ForeignSessionProvider',
+    declaration: 'export interface ForeignSessionProvider {\n    readonly sourceKind: ForeignSessionSourceKind;\n    discover(signal?: AbortSignal): Promise<readonly ForeignSessionCandidate[]>;\n    capture(request: ForeignSessionCaptureRequest): Promise<ForeignSessionSnapshot>;\n}',
+  },
+  {
+    name: 'ForeignSessionSnapshot',
+    declaration: 'export interface ForeignSessionSnapshot {\n    readonly provenance: ForeignSessionProvenance;\n    readonly sourceIdentity: string;\n    readonly cwdHint?: string;\n    readonly messages: readonly ForeignVisibleMessage[];\n    readonly tools: readonly ForeignToolActivity[];\n    readonly capturedBytes: number;\n    readonly contextBytes: number;\n    readonly trailingPartialRecordIgnored: boolean;\n}',
+  },
+  {
+    name: 'ForeignSessionSourceKind',
+    declaration: 'export type ForeignSessionSourceKind = \'codex\' | \'claude-code\';',
+  },
+  {
+    name: 'ForeignToolActivity',
+    declaration: 'export interface ForeignToolActivity {\n    readonly name: string;\n    readonly status: \'completed\' | \'failed\' | \'interrupted\' | \'unknown\';\n    readonly timestamp?: number;\n}',
+  },
+  {
+    name: 'ForeignVisibleMessage',
+    declaration: 'export interface ForeignVisibleMessage {\n    readonly role: \'user\' | \'assistant\';\n    readonly text: string;\n    readonly timestamp?: number;\n    readonly interrupted?: true;\n}',
+  },
+  {
     name: 'FsDirEntry',
     declaration: 'export interface FsDirEntry {\n    name: string;\n    type: \'file\' | \'directory\' | \'other\';\n    target: FsTarget;\n    version?: FsVersion;\n    size?: number;\n}',
   },
@@ -3800,6 +3902,78 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionId',
     declaration: 'export type SessionId = Branded<\'SessionId\'>;',
+  },
+  {
+    name: 'SessionImportCaptureRequest',
+    declaration: 'export interface SessionImportCaptureRequest {\n    readonly sourceKind: SessionImportSourceKind;\n    readonly sourceSessionId: string;\n}',
+  },
+  {
+    name: 'SessionImportCaptureValue',
+    declaration: 'export interface SessionImportCaptureValue {\n    readonly reservationId: string;\n    readonly sourceKind: SessionImportSourceKind;\n    readonly sourceSessionId: string;\n    readonly capturedAt: number;\n    readonly capturedBytes: number;\n    readonly contextBytes: number;\n    readonly messageCount: number;\n    readonly toolCount: number;\n    readonly cwdHint?: string;\n    readonly trailingPartialRecordIgnored: boolean;\n}',
+  },
+  {
+    name: 'SessionImportCommitRequest',
+    declaration: 'export interface SessionImportCommitRequest {\n    readonly reservationId: string;\n    readonly workspaceId: string;\n    readonly agentPreset: string;\n}',
+  },
+  {
+    name: 'SessionImportCommitValue',
+    declaration: 'export interface SessionImportCommitValue {\n    readonly sessionId: string;\n    readonly existing: boolean;\n    readonly workspaceAttached: boolean;\n}',
+  },
+  {
+    name: 'SessionImportDiscardRequest',
+    declaration: 'export interface SessionImportDiscardRequest {\n    readonly reservationId: string;\n}',
+  },
+  {
+    name: 'SessionImportDiscardValue',
+    declaration: 'export interface SessionImportDiscardValue {\n    readonly discarded: boolean;\n}',
+  },
+  {
+    name: 'SessionImportDiscoverRequest',
+    declaration: 'export interface SessionImportDiscoverRequest {\n    readonly sourceKind: SessionImportSourceKind;\n}',
+  },
+  {
+    name: 'SessionImportDiscoverValue',
+    declaration: 'export interface SessionImportDiscoverValue {\n    readonly items: readonly SessionImportSourceRow[];\n}',
+  },
+  {
+    name: 'SessionImportFailure',
+    declaration: 'export interface SessionImportFailure {\n    readonly code: SessionImportSourceErrorCode | \'reservation-not-found\' | \'workspace-not-found\' | \'preset-not-found\' | \'preset-unavailable\' | \'target-conflict\' | \'cancelled\' | \'internal\';\n    readonly message: string;\n    readonly sourceKind?: SessionImportSourceKind;\n    readonly record?: number;\n}',
+  },
+  {
+    name: 'SessionImportOptionsValue',
+    declaration: 'export interface SessionImportOptionsValue {\n    readonly sourceKinds: readonly SessionImportSourceKind[];\n    readonly workspaces: readonly SessionImportWorkspaceOption[];\n    readonly presets: readonly SessionImportPresetOption[];\n}',
+  },
+  {
+    name: 'SessionImportPresetOption',
+    declaration: 'export interface SessionImportPresetOption {\n    readonly id: string;\n    readonly name: string;\n}',
+  },
+  {
+    name: 'SessionImportRejected',
+    declaration: 'export interface SessionImportRejected {\n    readonly ok: false;\n    readonly error: SessionImportFailure;\n}',
+  },
+  {
+    name: 'SessionImportResult',
+    declaration: 'export type SessionImportResult<T> = SessionImportSuccess<T> | SessionImportRejected;',
+  },
+  {
+    name: 'SessionImportSourceErrorCode',
+    declaration: 'export type SessionImportSourceErrorCode = \'provider-unavailable\' | \'source-not-found\' | \'source-ambiguous\' | \'source-unsafe\' | \'source-too-large\' | \'record-too-large\' | \'source-changed\' | \'source-corrupt\' | \'unsupported-version\' | \'context-too-large\' | \'duplicate-record\' | \'out-of-order\';',
+  },
+  {
+    name: 'SessionImportSourceKind',
+    declaration: 'export type SessionImportSourceKind = \'codex\' | \'claude-code\';',
+  },
+  {
+    name: 'SessionImportSourceRow',
+    declaration: 'export interface SessionImportSourceRow {\n    readonly sourceKind: SessionImportSourceKind;\n    readonly sourceSessionId: string;\n    readonly sizeBytes: number;\n    readonly modifiedAt: number;\n}',
+  },
+  {
+    name: 'SessionImportSuccess',
+    declaration: 'export interface SessionImportSuccess<T> {\n    readonly ok: true;\n    readonly value: T;\n}',
+  },
+  {
+    name: 'SessionImportWorkspaceOption',
+    declaration: 'export interface SessionImportWorkspaceOption {\n    readonly id: string;\n    readonly title: string;\n    readonly path: string;\n}',
   },
   {
     name: 'SessionInspection',

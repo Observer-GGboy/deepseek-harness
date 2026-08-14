@@ -18,8 +18,13 @@ import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
 import { Button, IconPlusOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
 import { CustomProviderCard } from './CustomProviderCard.tsx'
-import { deriveKeyRef, messageOf, protocolChoices, providerUsable } from './store.ts'
-import type { ModelsSettingsState, ModelsSettingsStore, ProviderRow } from './store.ts'
+import {
+  credentialReferenceConflicts, credentialReferenceUses, isPageManagedCredentialRef,
+  messageOf, protocolChoices, providerUsable,
+} from './store.ts'
+import type {
+  CredentialReferenceUse, ModelsSettingsState, ModelsSettingsStore, ProviderRow,
+} from './store.ts'
 import { ProviderEditor, type ProviderEditorProps } from './ProviderEditor.tsx'
 import type { en } from './locales.ts'
 import styles from './ModelsSection.module.css'
@@ -63,7 +68,7 @@ interface EditorTarget extends ProviderIdentity {
 /** Values that vary around the shared provider-editor rendering. */
 interface ProviderEditorRenderProps extends Pick<
   ProviderEditorProps,
-  'namespace' | 'api' | 't' | 'readOnly' | 'onClose'
+  'namespace' | 'api' | 't' | 'readOnly' | 'credentialReferences' | 'onClose'
 > {
   target: EditorTarget
 }
@@ -131,18 +136,27 @@ export function needsSetup(row: ProviderRow, anyUsable: boolean): boolean {
   return row.credential?.configured !== true
 }
 
-function targetOf(row: ProviderRow): EditorTarget {
-  const managedRef = deriveKeyRef(row.entry.provider)
-  const credentialRef = row.apiKeyEnv === managedRef
-    && row.credential?.configured === true
-    && row.credential.writable
-    ? managedRef
-    : undefined
-  return {
+function targetOf(
+  row: ProviderRow,
+  credentialReferences: readonly CredentialReferenceUse[],
+): EditorTarget {
+  const target = {
     provider: row.entry.provider,
     displayName: row.entry.displayName,
     settingsNs: row.entry.settingsNs,
     settingsPath: row.entry.settingsPath,
+  }
+  const credentialRef = row.apiKeyEnv !== undefined
+    && isPageManagedCredentialRef(target, row.apiKeyEnv)
+    // A shared reference is not owned by this row. Keeping it is the only
+    // deletion behavior that cannot remove another provider's credential.
+    && credentialReferenceConflicts(credentialReferences, target, row.apiKeyEnv).length === 0
+    && row.credential?.configured === true
+    && row.credential.writable
+    ? row.apiKeyEnv
+    : undefined
+  return {
+    ...target,
     ...credentialRef === undefined ? {} : { credentialRef },
     // Absent is not "shipped": an adapter that answers nothing leaves the
     // route-level fields only a declared route owns off the card, exactly as
@@ -262,6 +276,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
   // One fact decides both first-run postures on this page and the onboarding
   // step: whether the user already has a provider to talk to.
   const anyUsable = state.rows.some(providerUsable)
+  const credentialReferences = credentialReferenceUses(state.rows)
   const configured = state.rows.filter(row => row.configured)
   const addable = state.rows.filter(row => !row.configured && row.entry.settingsNs !== '')
   const addTarget = adding ? editing : undefined
@@ -285,7 +300,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
         )}
       <ul className={styles['rows']}>
         {configured.map((row) => {
-          const target = targetOf(row)
+          const target = targetOf(row, credentialReferences)
           const namespace = state.namespaces.get(target.settingsNs)
           /* v8 ignore next -- the join marks a row configured only when its namespace resolved */
           if (namespace === undefined) return null
@@ -300,6 +315,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
                   api,
                   t,
                   readOnly: !state.writable,
+                  credentialReferences,
                   onClose: (changed) => { closeSetup(changed, target) },
                 })}
               </li>
@@ -384,6 +400,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
                   api,
                   t,
                   readOnly: !state.writable,
+                  credentialReferences,
                   onClose: (changed) => { closeEditor(changed, target) },
                 })
                 : null}
@@ -405,7 +422,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
                     const row = addable.find(candidate => candidate.entry.provider === event.target.value)
                     /* v8 ignore next -- the select only lists addable rows */
                     if (row === undefined) return
-                    setEditing(targetOf(row))
+                    setEditing(targetOf(row, credentialReferences))
                   }}
                 >
                   {addable.map(row => (
@@ -423,6 +440,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
                 api={api}
                 t={t}
                 readOnly={!state.writable}
+                credentialReferences={credentialReferences}
                 onClose={(changed) => { closeEditor(changed, addTarget) }}
               />
             </div>
@@ -438,6 +456,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
                   api={api}
                   t={t}
                   readOnly={!state.writable}
+                  credentialReferences={credentialReferences}
                   onClose={(changed) => {
                     setDeclaring(false)
                     if (changed) void controller.load()
@@ -462,7 +481,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
                     setSavedTarget(undefined)
                     setDeclaring(false)
                     setAdding(true)
-                    setEditing(targetOf(first))
+                    setEditing(targetOf(first, credentialReferences))
                   }}
                 >
                   {/* Same glyph as the composer's attach button. */}

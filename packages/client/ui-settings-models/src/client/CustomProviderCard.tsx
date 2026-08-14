@@ -8,7 +8,9 @@
  * and the settings address does not exist until it is. One `settings.mutate`
  * sets the whole profile at `providers.<route>`; the key travels separately
  * through `credentials.set` under the reference the profile records, exactly as
- * an existing provider's key does.
+ * an existing provider's key does. A derived reference already used by another
+ * settings profile defaults to a namespace-scoped independent reference;
+ * sharing the existing credential requires an explicit choice.
  *
  * The three fields a hand-declared route cannot default — endpoint, protocol,
  * and at least one model — are required here rather than at load, so the
@@ -25,11 +27,17 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
 import { apiKeyFailure } from './apiKey.ts'
+import {
+  CredentialReferenceChoice, type CredentialReferenceMode,
+} from './CredentialReferenceChoice.tsx'
 import { EditorFooter } from './EditorFooter.tsx'
 import { validateDeepSeekModels } from './DeepSeekModelsEditor.tsx'
 import { ModelListEditor } from './ModelListEditor.tsx'
 import type { ModelDraft } from './ModelListEditor.tsx'
-import { deriveKeyRef, messageOf } from './store.ts'
+import {
+  credentialReferenceConflicts, deriveIndependentKeyRef, deriveKeyRef, messageOf,
+} from './store.ts'
+import type { CredentialReferenceTarget, CredentialReferenceUse } from './store.ts'
 import type { en } from './locales.ts'
 import styles from './ModelsSection.module.css'
 
@@ -64,6 +72,8 @@ export interface CustomProviderCardProps {
   t: (key: keyof typeof en) => string
   /** Disable writes (read-only settings provider). */
   readOnly: boolean
+  /** Value-free reference ledger used to detect cross-profile collisions. */
+  credentialReferences?: readonly CredentialReferenceUse[]
   /** Close the card; `changed` reports whether a provider was created. */
   onClose: (changed: boolean) => void
 }
@@ -84,6 +94,10 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   const [protocol, setProtocol] = useState(protocols[0] ?? '')
   const [keyDraft, setKeyDraft] = useState('')
   const [models, setModels] = useState<readonly ModelDraft[]>([])
+  const [credentialChoice, setCredentialChoice] = useState<{
+    collision: string
+    mode: CredentialReferenceMode
+  }>(() => ({ collision: '', mode: 'separate' }))
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | undefined>(undefined)
   /**
@@ -95,6 +109,30 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   const disabled = props.readOnly || busy
   /** Everything but the key stops being editable once the provider exists. */
   const profileDisabled = disabled || committed
+
+  const credentialTarget: CredentialReferenceTarget = {
+    provider: route,
+    displayName: displayName.length === 0 ? route : displayName,
+    settingsNs: NS,
+    settingsPath: ['providers', route],
+  }
+  const credentialReferences = props.credentialReferences ?? []
+  const keyRef = deriveKeyRef(route)
+  const referenceConflicts = route.length === 0
+    ? []
+    : credentialReferenceConflicts(credentialReferences, credentialTarget, keyRef)
+  const independentKeyRef = deriveIndependentKeyRef(credentialTarget, credentialReferences)
+  const collisionIdentity = [
+    keyRef,
+    independentKeyRef,
+    ...referenceConflicts.map(use => `${use.settingsNs}:${use.settingsPath.join('.')}:${use.provider}`),
+  ].join('\u0000')
+  const credentialMode = credentialChoice.collision === collisionIdentity
+    ? credentialChoice.mode
+    : 'separate'
+  const writeRef = referenceConflicts.length > 0 && credentialMode === 'separate'
+    ? independentKeyRef
+    : keyRef
 
   const routeInvalid = route.length > 0 && !ROUTE_PATTERN.test(route)
   const routeTaken = taken.includes(route)
@@ -130,7 +168,6 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
 
   /** Perform the create, returning a failure message or undefined. */
   const createOnce = async (): Promise<string | undefined> => {
-    const keyRef = deriveKeyRef(route)
     const storesKey = keyValue.length > 0
     if (!committed) {
       const profile = {
@@ -139,7 +176,7 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
         // about to store a key, matching the editor: a route declared with the
         // key left blank keeps its provider-native auth path (a credential
         // chain, ADC) instead of resolving a reference nothing ever sets.
-        ...storesKey ? { apiKeyEnv: keyRef } : {},
+        ...storesKey ? { apiKeyEnv: writeRef } : {},
         api: protocol,
         baseURL,
         models: models.map(model => ({ ...model })),
@@ -160,7 +197,7 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
       setCommitted(true)
     }
     if (storesKey) {
-      const stored = await api.credentials.set({ ref: keyRef, value: keyValue })
+      const stored = await api.credentials.set({ ref: writeRef, value: keyValue })
       // The profile landed; saying the key did not is the only honest report,
       // and the retry above now goes straight back to this write.
       if (!stored.result.ok) return stored.result.error.message
@@ -264,6 +301,19 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
           ? null
           : <p className={styles['error']}>{t(keyFailure === 'keyBlank' ? 'keyBlankNew' : keyFailure)}</p>}
       </div>
+      {referenceConflicts.length === 0 || routeInvalid || routeTaken
+        ? null
+        : (
+          <CredentialReferenceChoice
+            conflicts={referenceConflicts}
+            sharedRef={keyRef}
+            independentRef={independentKeyRef}
+            mode={credentialMode}
+            onModeChange={(mode) => { setCredentialChoice({ collision: collisionIdentity, mode }) }}
+            disabled={profileDisabled}
+            t={t}
+          />
+        )}
       <ModelListEditor
         models={models}
         onChange={setModels}

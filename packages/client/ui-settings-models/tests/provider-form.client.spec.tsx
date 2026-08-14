@@ -653,6 +653,14 @@ describe('provider rows', () => {
 })
 
 describe('hand-declared providers', () => {
+  const deepSeekReferenceUse = [{
+    provider: 'deepseek-official',
+    displayName: 'DeepSeek',
+    settingsNs: 'llm-deepseek',
+    settingsPath: [],
+    ref: 'DEEPSEEK_API_KEY',
+  }]
+
   function mountCard(
     overrides: Partial<Parameters<typeof CustomProviderCard>[0]> = {},
     wire: Parameters<typeof scriptedFace>[0] = {},
@@ -672,6 +680,14 @@ describe('hand-declared providers', () => {
       />,
     )
     return { ...scripted, onClose }
+  }
+
+  function fillMinimalCustomProvider(route = 'deepseek'): void {
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: route } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://gateway.example/v1' } })
+    fireEvent.change(screen.getByLabelText(en.keyInput), { target: { value: 'fixture-custom-key' } })
+    fireEvent.click(screen.getByRole('button', { name: en.addModel }))
+    fireEvent.change(screen.getByLabelText(`${en.modelId} 1`), { target: { value: 'deepseek-chat' } })
   }
 
   it('writes the whole profile and the key under the derived reference', async () => {
@@ -706,6 +722,46 @@ describe('hand-declared providers', () => {
       expectedRevision: 7,
     })
     expect(set).toHaveBeenCalledWith({ ref: 'ACME_GATEWAY_API_KEY', value: 'gw-key' })
+  })
+
+  it('creates a colliding custom route with an independent credential by default', async () => {
+    const { mutate, set, onClose } = mountCard({ credentialReferences: deepSeekReferenceUse })
+    fillMinimalCustomProvider()
+
+    expect(screen.getByRole<HTMLInputElement>('radio', { name: /Use a separate credential/ }).checked)
+      .toBe(true)
+    fireEvent.click(screen.getByText(en.create))
+
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    expect(firstMutate(mutate).ops[0]?.value).toMatchObject({
+      apiKeyEnv: 'DSH_LLM_PI_AI_DEEPSEEK_API_KEY',
+    })
+    expect(set).toHaveBeenCalledWith({
+      ref: 'DSH_LLM_PI_AI_DEEPSEEK_API_KEY',
+      value: 'fixture-custom-key',
+    })
+  })
+
+  it('creates a colliding custom route with the shared credential only after selection', async () => {
+    const { mutate, set, onClose } = mountCard({ credentialReferences: deepSeekReferenceUse })
+    fillMinimalCustomProvider()
+    fireEvent.click(screen.getByRole('radio', { name: /Share the existing credential/ }))
+    fireEvent.click(screen.getByText(en.create))
+
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    expect(firstMutate(mutate).ops[0]?.value).toMatchObject({ apiKeyEnv: 'DEEPSEEK_API_KEY' })
+    expect(set).toHaveBeenCalledWith({ ref: 'DEEPSEEK_API_KEY', value: 'fixture-custom-key' })
+  })
+
+  it('hides the collision choice while the custom route id is invalid or already taken', () => {
+    mountCard({ credentialReferences: deepSeekReferenceUse })
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'deepseek!' } })
+    expect(screen.queryByRole('radio')).toBeNull()
+    cleanup()
+
+    mountCard({ credentialReferences: deepSeekReferenceUse, taken: ['deepseek'] })
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'deepseek' } })
+    expect(screen.queryByRole('radio')).toBeNull()
   })
 
   it('scopes each card to fields a provider can actually own', async () => {

@@ -269,6 +269,93 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* A colliding reference requires an explicit storage decision. A native
+   fieldset/radio group preserves keyboard and screen-reader behavior, while
+   the 44px label target remains comfortable on a narrow settings panel. */
+.credentialChoice {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.credentialChoiceLegend {
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.credentialChoiceDescription {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-warn-label);
+  overflow-wrap: anywhere;
+}
+
+.credentialChoiceOption {
+  box-sizing: border-box;
+  min-height: 44px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.credentialChoiceOption:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.credentialChoiceOption input {
+  flex: none;
+  margin: 3px 0 0;
+  accent-color: var(--dsw-alias-button-primary-fill);
+  cursor: pointer;
+}
+
+.credentialChoiceOption input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+}
+
+.credentialChoiceLabel,
+.credentialChoiceHint {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.credentialChoiceLabel {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.credentialChoiceHint {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.credentialChoice:disabled .credentialChoiceOption {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.credentialChoice:disabled .credentialChoiceOption:hover {
+  background: transparent;
+}
+
+.credentialChoice:disabled .credentialChoiceOption input {
+  cursor: default;
+}
+
 .linkButton {
   box-sizing: border-box;
   display: inline-flex;

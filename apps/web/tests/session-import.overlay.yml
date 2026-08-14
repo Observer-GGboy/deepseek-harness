@@ -1,0 +1,10 @@
+# Hermetic local transcript roots for the assembled Web import scenario.
+- id: session-import-codex
+  config:
+    root: !!js process.env.DSH_SESSION_IMPORT_FIXTURE_ROOT
+    maxCandidates: 20
+
+- id: session-import-claude-code
+  config:
+    root: !!js process.env.DSH_SESSION_IMPORT_FIXTURE_ROOT
+    maxCandidates: 20

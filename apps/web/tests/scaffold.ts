@@ -143,7 +143,9 @@ class RouteOnlyAdapter extends LlmAdapter {
       provider,
       id: model,
       name: listed?.name ?? model,
-      ...listed?.contextWindow === undefined ? {} : { contextWindow: listed.contextWindow },
+      ...listed?.contextWindow === undefined
+        ? {}
+        : { context: { contextWindow: listed.contextWindow } },
     })
   }
 

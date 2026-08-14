@@ -184,7 +184,7 @@ export class TestSessions implements ISessions {
 
   /** Calls observed on the service-level face, newest last. */
   readonly calls: {
-    method: 'open' | 'openSubagent' | 'setSubagentCatalogOpen' | 'refreshSubagents'
+    method: 'open' | 'refresh' | 'openSubagent' | 'setSubagentCatalogOpen' | 'refreshSubagents'
       | 'clear' | 'search' | 'fork'
     args: unknown[]
   }[] = []
@@ -396,6 +396,12 @@ export class TestSessions implements ISessions {
     const id = scopeOf(ctx)
     if (id === undefined) return undefined
     return this.records.get(id)?.session
+  }
+
+  /** Record a full-list refresh; fixture callers publish the refreshed rows explicitly. */
+  refresh(): Promise<void> {
+    this.calls.push({ method: 'refresh', args: [] })
+    return Promise.resolve()
   }
 
   /**

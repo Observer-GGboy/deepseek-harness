@@ -636,6 +636,17 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 来源：[`packages/core/session/src/types.ts:332`](../packages/core/session/src/types.ts)
 
+<a id="sessionimported--log-only"></a>
+
+#### `session/imported` — 仅日志
+
+```ts persistence-catalog
+/** Safe origin facts for one immutable foreign snapshot; never model-visible. */
+'session/imported': SessionImportedEventData
+```
+
+来源：[`packages/session-import/session-import-local/src/index.ts:62`](../packages/session-import/session-import-local/src/index.ts)
+
 <a id="sessiontitle--log-only"></a>
 
 #### `session/title` — log-only

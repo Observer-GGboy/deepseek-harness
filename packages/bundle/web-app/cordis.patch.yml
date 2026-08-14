@@ -73,6 +73,29 @@
     - id: workspace
       name: '@deepseek-ai/dsh-workspace'
 
+    # Provider-neutral local transcript import. Discovery is metadata-only;
+    # selected captures are bounded, sanitized snapshots retained by the Host.
+    - id: session-import
+      name: '@deepseek-ai/dsh-session-import'
+
+    - id: session-import-codex
+      name: '@deepseek-ai/dsh-session-import-codex'
+
+    - id: session-import-claude-code
+      name: '@deepseek-ai/dsh-session-import-claude-code'
+
+    - id: session-import-local
+      name: '@deepseek-ai/dsh-session-import-local'
+      config:
+        maxSourceBytes: 67108864
+        maxLineBytes: 1048576
+        maxVisibleContextBytes: 4194304
+        maxVisibleMessages: 10000
+        maxToolActivities: 1000
+        maxDiscoveryItems: 500
+        maxReservations: 32
+        maxToolSummaryBytes: 65536
+
     - id: session-projection-cache
       name: '@deepseek-ai/dsh-session-projection-cache'
       config:
@@ -194,6 +217,9 @@
 
     - id: ui-settings-plugin-inventory
       name: '@deepseek-ai/dsh-client-ui-settings-plugin-inventory'
+
+    - id: ui-session-import
+      name: '@deepseek-ai/dsh-client-ui-session-import'
 
     - id: ui-conversation
       name: '@deepseek-ai/dsh-client-ui-conversation'

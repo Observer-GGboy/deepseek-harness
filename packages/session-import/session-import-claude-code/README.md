@@ -6,7 +6,7 @@ Claude Code Service Provider for `ctx.sessionImports`. It scans the configured r
 
 The parser retains visible user/assistant text and generated summaries. Repeated assistant UUID records converge only when one text is a prefix of the other. Sidechains, system/progress/file-history records, thinking blocks, attachments, tool input, and tool-result bodies are excluded; tool ids contribute only inert names and terminal statuses. The body-free `frame-link` record observed in Claude Code 2.1.128 is explicitly ignored as non-conversation metadata. Conflicting duplicates, out-of-order timestamps, and unknown required shapes fail closed.
 
-The v1 converter explicitly accepts versions from `2.1.128` through `2.1.222`. Missing, malformed, older, or newer versions fail closed. A transcript may contain multiple versions within that range; safe provenance records the observed minimum and maximum as `min..max` instead of rejecting a supported updater transition.
+The v1 converter explicitly accepts versions from `2.1.128` through `2.1.222`, including bounded prerelease suffixes. Missing, malformed, older, or newer versions fail closed. An unsupported-version diagnosis echoes only a short canonical numeric version; malformed, prerelease, path-shaped, credential-shaped, and oversized values never enter the error message. A transcript may contain multiple versions within that range; safe provenance records the observed minimum and maximum as `min..max` instead of rejecting a supported updater transition.
 
 ## Model Experience
 

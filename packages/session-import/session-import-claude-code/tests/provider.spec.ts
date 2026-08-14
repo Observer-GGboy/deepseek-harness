@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import SessionImportRegistry, { ForeignSessionImportError } from '@deepseek-ai/dsh-session-import'
 import { apply, ClaudeCodeSessionImportProvider } from '../src/index.ts'
 import { apply as applyInvariant } from '../src/invariant.ts'
@@ -138,6 +138,31 @@ describe('ClaudeCodeSessionImportProvider', () => {
     expect(unordered.code).toBe('out-of-order')
   })
 
+  it('never exposes malformed, credential-shaped, path-shaped, or oversized version values', async () => {
+    const unsafeVersions = [
+      '/private/project/.env',
+      'Bearer sk-claude-version-secret-1234567890',
+      'sk-claude-version-secret-1234567890',
+      `2.1.223-${'x'.repeat(512)}`,
+    ]
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      for (const [index, version] of unsafeVersions.entries()) {
+        const id = `${String(index + 80).padStart(8, '0')}-9999-4999-8999-999999999999`
+        const error = await importError(captureRows(id, [{
+          sessionId: id, version, type: 'system',
+        }]))
+        expect(error).toMatchObject({
+          code: 'unsupported-version', sourceKind: 'claude-code', record: 1,
+        })
+        expect(`${error.message}\n${error.stack ?? ''}`).not.toContain(version)
+      }
+      expect(logged).not.toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
   it('accepts every body-free record and safe content variant across supported upgrades', async () => {
     const id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
     const hiddenTypes = [
@@ -186,7 +211,9 @@ describe('ClaudeCodeSessionImportProvider', () => {
       { rows: [null], code: 'source-corrupt' },
       { rows: [{ type: 'system', version: '2.1.128' }], code: 'source-corrupt' },
       { rows: [{ sessionId: base, type: 'system' }], code: 'unsupported-version' },
+      { rows: [{ sessionId: base, version: 1, type: 'system' }], code: 'unsupported-version' },
       { rows: [{ sessionId: base, version: 'bad', type: 'system' }], code: 'unsupported-version' },
+      { rows: [{ sessionId: base, version: '2.1.128-01', type: 'system' }], code: 'unsupported-version' },
       { rows: [{ sessionId: base, version: '2.1.127', type: 'system' }], code: 'unsupported-version' },
       { rows: [{ sessionId: base, version: '2.1.223', type: 'system' }], code: 'unsupported-version' },
       { rows: [{ sessionId: 'different', version: '2.1.128', type: 'system' }], code: 'source-corrupt' },

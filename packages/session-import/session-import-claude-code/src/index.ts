@@ -27,6 +27,9 @@ const CONVERTER_VERSION = 'claude-transcript-v1'
 const DEFAULT_MAX_CANDIDATES = 500
 const MIN_SUPPORTED_VERSION = [2, 1, 128] as const
 const MAX_SUPPORTED_VERSION = [2, 1, 222] as const
+const MAX_VERSION_LENGTH = 64
+const VERSION_PATTERN = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u
+const DIAGNOSTIC_VERSION_PATTERN = /^(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/u
 
 /** Local Claude Code source configuration. */
 export interface Config {
@@ -46,9 +49,19 @@ const isRecord = (value: unknown): value is RecordMap =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
 
 function versionParts(version: string): readonly [number, number, number] | undefined {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/u.exec(version)
+  if (version.length > MAX_VERSION_LENGTH) return undefined
+  const match = VERSION_PATTERN.exec(version)
   if (match === null) return undefined
+  const prerelease = match[4]
+  if (prerelease?.split('.').some(identifier => /^\d+$/u.test(identifier)
+    && identifier.length > 1 && identifier.startsWith('0')) === true) return undefined
   return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+/** Return a short stable-version label that is safe to place in a diagnosis. */
+function diagnosticVersion(version: unknown): string | undefined {
+  if (typeof version !== 'string' || version.length > MAX_VERSION_LENGTH) return undefined
+  return DIAGNOSTIC_VERSION_PATTERN.test(version) ? version : undefined
 }
 
 function compareVersion(
@@ -62,14 +75,15 @@ function compareVersion(
   return 0
 }
 
-function assertSupportedVersion(version: string, record: number): void {
-  const parsed = versionParts(version)
+function assertSupportedVersion(version: unknown, record: number): asserts version is string {
+  const parsed = typeof version === 'string' ? versionParts(version) : undefined
   if (parsed === undefined
     || compareVersion(parsed, MIN_SUPPORTED_VERSION) < 0
     || compareVersion(parsed, MAX_SUPPORTED_VERSION) > 0) {
+    const label = diagnosticVersion(version)
     throw new ForeignSessionImportError(
       'unsupported-version', SOURCE_KIND, record,
-      `claude-code version ${version} at record ${record} is unsupported`,
+      `claude-code version${label === undefined ? '' : ` ${label}`} at record ${record} is unsupported`,
     )
   }
 }
@@ -169,7 +183,7 @@ class ClaudeCaptureParser {
       this.sessionIdSeen = true
     }
     const version = row['version']
-    if (typeof version === 'string') {
+    if (version !== undefined) {
       assertSupportedVersion(version, record)
       this.versions.add(version)
       const ordered = [...this.versions].sort((left, right) =>

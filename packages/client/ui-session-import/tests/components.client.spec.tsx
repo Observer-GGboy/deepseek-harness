@@ -220,6 +220,34 @@ describe('SessionImportSection', () => {
     expect((await screen.findByRole('alert')).textContent).toBe(en.genericFailed)
   })
 
+  it('renders a safe unsupported-version diagnosis without the untrusted version value', async () => {
+    const unsafeVersion = 'Bearer sk-ui-version-secret-1234567890'
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const value = props({ capture: vi.fn(async () => ({
+      ok: false as const,
+      error: {
+        code: 'unsupported-version' as const,
+        sourceKind: 'codex' as const,
+        record: 1,
+        message: 'codex version at record 1 is unsupported',
+        unsafeVersion,
+      },
+    })) })
+    try {
+      render(<SessionImportSection {...value} />)
+      await screen.findByRole('button', { name: en.scan })
+      fireEvent.click(screen.getByRole('button', { name: en.scan }))
+      await screen.findByText('11111111-1111-4111-8111-111111111111')
+      fireEvent.click(screen.getByRole('button', { name: en.capture }))
+      expect((await screen.findByRole('alert')).textContent)
+        .toBe('codex version at record 1 is unsupported')
+      expect(document.body.textContent).not.toContain(unsafeVersion)
+      expect(logged).not.toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
   it('handles rejected and empty option sets without inventing target choices', async () => {
     render(<SessionImportSection {...props({ options: vi.fn(async () => ({
       ok: false as const, error: { code: 'internal' as const, message: '' },

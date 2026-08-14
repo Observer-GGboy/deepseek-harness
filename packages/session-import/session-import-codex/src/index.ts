@@ -26,6 +26,9 @@ const CONVERTER_VERSION = 'codex-rollout-v1'
 const DEFAULT_MAX_CANDIDATES = 500
 const MIN_SUPPORTED_VERSION = [0, 144, 0] as const
 const MAX_SUPPORTED_VERSION = [0, 148, 999] as const
+const MAX_VERSION_LENGTH = 64
+const VERSION_PATTERN = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u
+const DIAGNOSTIC_VERSION_PATTERN = /^(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/u
 
 /** Local Codex source configuration. */
 export interface Config {
@@ -45,9 +48,19 @@ const isRecord = (value: unknown): value is RecordMap =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
 
 function versionParts(version: string): readonly [number, number, number] | undefined {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/u.exec(version)
+  if (version.length > MAX_VERSION_LENGTH) return undefined
+  const match = VERSION_PATTERN.exec(version)
   if (match === null) return undefined
+  const prerelease = match[4]
+  if (prerelease?.split('.').some(identifier => /^\d+$/u.test(identifier)
+    && identifier.length > 1 && identifier.startsWith('0')) === true) return undefined
   return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+/** Return a short stable-version label that is safe to place in a diagnosis. */
+function diagnosticVersion(version: unknown): string | undefined {
+  if (typeof version !== 'string' || version.length > MAX_VERSION_LENGTH) return undefined
+  return DIAGNOSTIC_VERSION_PATTERN.test(version) ? version : undefined
 }
 
 function compareVersion(
@@ -72,9 +85,10 @@ function assertSupportedVersion(version: unknown, record: number): string {
   if (parsed === undefined
     || compareVersion(parsed, MIN_SUPPORTED_VERSION) < 0
     || compareVersion(parsed, MAX_SUPPORTED_VERSION) > 0) {
+    const label = diagnosticVersion(version)
     throw new ForeignSessionImportError(
       'unsupported-version', SOURCE_KIND, record,
-      `codex version ${version} at record ${record} is unsupported`,
+      `codex version${label === undefined ? '' : ` ${label}`} at record ${record} is unsupported`,
     )
   }
   return version

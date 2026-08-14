@@ -6,7 +6,7 @@ Codex Service Provider for `ctx.sessionImports`. It scans the configured root (d
 
 Supported records include `session_meta`, visible user/assistant `response_item` messages, selected visible `event_msg` messages, `compacted` summaries, and inert tool-call status. System/developer messages, reasoning, token counts, tool arguments, and tool output bodies are excluded. Unknown required records and conflicting identities fail closed.
 
-The v1 converter explicitly accepts semantic versions from `0.144.0` through `0.148.999`, including prerelease suffixes whose numeric core is in that range. Missing, malformed, older, or newer versions fail closed. A rollout may repeat `session_meta` only when the Session identity remains identical; each supported version is retained in safe provenance in sorted `+` form so an in-file updater transition is visible rather than silently discarded.
+The v1 converter explicitly accepts semantic versions from `0.144.0` through `0.148.999`, including bounded prerelease suffixes whose numeric core is in that range. Missing, malformed, older, or newer versions fail closed. An unsupported-version diagnosis echoes only a short canonical numeric version; malformed, prerelease, path-shaped, credential-shaped, and oversized values never enter the error message. A rollout may repeat `session_meta` only when the Session identity remains identical; each supported version is retained in safe provenance in sorted `+` form so an in-file updater transition is visible rather than silently discarded.
 
 ## Model Experience
 

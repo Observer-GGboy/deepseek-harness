@@ -8,6 +8,8 @@ Commit requires the operator's explicit Workspace, Agent-preset, and exact provi
 
 JSONL first materialization uses the backend's no-replace publication; SQLite inserts the header and complete event batch in one transaction. Under same-process or independent-process contention, one writer publishes and equivalent writers inspect the same complete target. A different cwd, preset, provider, or model for the same deterministic target is an explicit conflict. The persisted `session/imported` event contains safe provenance and counts, never the Host-local source identity or source path.
 
+An append rejection becomes `target-conflict` only when inspection finds a durable mismatching winner; no winner produces a redacted `internal` persistence failure. Callers waiting on one commit cancel independently while another waiter remains. The final waiter aborts and waits for the shared operation to settle before receiving `cancelled`. Plugin disposal closes commit admission, aborts every shared commit, and waits for them to settle; a complete Session whose append crossed the atomic publication point is preserved, but disposal prevents any later Workspace attachment from starting.
+
 | Config key | Default | Boundary |
 |---|---:|---|
 | `maxSourceBytes` | 67108864 | selected source prefix |

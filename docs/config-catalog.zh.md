@@ -1562,7 +1562,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/session-import/session-import-claude-code/src/index.ts:32`](../packages/session-import/session-import-claude-code/src/index.ts)
+来源：[`packages/session-import/session-import-claude-code/src/index.ts:35`](../packages/session-import/session-import-claude-code/src/index.ts)
 
 <a id="deepseek-aidsh-session-import-codex"></a>
 
@@ -1580,7 +1580,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/session-import/session-import-codex/src/index.ts:31`](../packages/session-import/session-import-codex/src/index.ts)
+来源：[`packages/session-import/session-import-codex/src/index.ts:34`](../packages/session-import/session-import-codex/src/index.ts)
 
 <a id="deepseek-aidsh-session-import-local"></a>
 

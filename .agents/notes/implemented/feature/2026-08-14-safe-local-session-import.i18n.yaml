@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-14-safe-local-session-import.md
-2026-08-14-safe-local-session-import.md: dc39e3e414d4ac17ca68fca44e4d116edb5a5e7f
-2026-08-14-safe-local-session-import.zh.md: dd2188c9ad3c694be87e2073ca9c0d612fa42e46
+2026-08-14-safe-local-session-import.md: da80e61e698b6c3d9ae6daf5fd8e319993dda054
+2026-08-14-safe-local-session-import.zh.md: 303968fdd606cef04febd570ab91159dfd824fbc

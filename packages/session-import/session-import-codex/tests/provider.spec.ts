@@ -2,7 +2,7 @@ import { appendFile, mkdir, mkdtemp, rename, rm, stat, symlink, truncate, utimes
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import SessionImportRegistry, {
   captureStableJsonl,
   discoverLocalJsonl,
@@ -145,6 +145,31 @@ describe('CodexSessionImportProvider', () => {
     expect(error.message).not.toContain(sourceRoot)
   })
 
+  it('never exposes malformed, credential-shaped, path-shaped, or oversized version values', async () => {
+    const unsafeVersions = [
+      '/private/project/.env',
+      'Bearer sk-codex-version-secret-1234567890',
+      'sk-codex-version-secret-1234567890',
+      `0.149.0-${'x'.repeat(512)}`,
+    ]
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      for (const [index, version] of unsafeVersions.entries()) {
+        const id = `${String(index + 80).padStart(8, '0')}-6666-4666-8666-666666666666`
+        const error = await importError(captureRows(id, [{
+          type: 'session_meta', payload: { id, cli_version: version },
+        }]))
+        expect(error).toMatchObject({
+          code: 'unsupported-version', sourceKind: 'codex', record: 1,
+        })
+        expect(`${error.message}\n${error.stack ?? ''}`).not.toContain(version)
+      }
+      expect(logged).not.toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
   it('accepts the complete known record vocabulary without retaining hidden bodies', async () => {
     const id = '12121212-1212-4212-8212-121212121212'
     const ignoredEvents = [
@@ -228,6 +253,7 @@ describe('CodexSessionImportProvider', () => {
       { rows: [{ type: 'session_meta', payload: null }], code: 'source-corrupt' },
       { rows: [{ type: 'session_meta', payload: { id: base } }], code: 'unsupported-version' },
       { rows: [{ type: 'session_meta', payload: { id: base, cli_version: 'bad' } }], code: 'unsupported-version' },
+      { rows: [{ type: 'session_meta', payload: { id: base, cli_version: '0.148.0-01' } }], code: 'unsupported-version' },
       { rows: [{ type: 'session_meta', payload: { id: base, cli_version: '0.143.9' } }], code: 'unsupported-version' },
       { rows: [{ type: 'session_meta', payload: { id: base, cli_version: '0.149.0' } }], code: 'unsupported-version' },
       { rows: [

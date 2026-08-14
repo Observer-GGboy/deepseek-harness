@@ -325,11 +325,14 @@ export class LocalSessionImportService extends TypertRemoteService {
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'sessionImportLocal')
-    ctx.effect(() => () => {
+    ctx.effect(() => async () => {
       this.accepting = false
+      const commits: Promise<SessionImportResult<SessionImportCommitValue>>[] = []
       for (const reservation of this.reservations.values()) {
         reservation.controller?.abort(new DOMException('Service disposed', 'AbortError'))
+        if (reservation.commit !== undefined) commits.push(reservation.commit)
       }
+      await Promise.allSettled(commits)
       this.reservations.clear()
     }, 'session-import-local.dispose')
   }
@@ -494,6 +497,9 @@ export class LocalSessionImportService extends TypertRemoteService {
     request: SessionImportCommitRequest,
     signal: AbortSignal,
   ): Promise<SessionImportResult<SessionImportCommitValue>> {
+    if (!this.accepting) {
+      return Promise.resolve(rejected({ code: 'internal', message: 'Local session import is shutting down.' }))
+    }
     const reservation = this.reservations.get(request.reservationId)
     if (reservation === undefined) {
       return Promise.resolve(rejected({ code: 'reservation-not-found', message: 'The captured import is no longer available.' }))
@@ -540,7 +546,7 @@ export class LocalSessionImportService extends TypertRemoteService {
     return this.watchCommit(reservation, signal)
   }
 
-  /** Give each caller independent cancellation while one target commit stays single-flight. */
+  /** Give each caller independent cancellation and make the final cancellation quiescent. */
   private watchCommit(
     reservation: Reservation,
     signal: AbortSignal,
@@ -552,14 +558,28 @@ export class LocalSessionImportService extends TypertRemoteService {
     reservation.waiters += 1
     return new Promise<SessionImportResult<SessionImportCommitValue>>((resolve) => {
       let done = false
-      const finish = (value: SessionImportResult<SessionImportCommitValue>): void => {
-        if (done) return
+      const leave = (): boolean => {
+        if (done) return false
         done = true
         signal.removeEventListener('abort', cancelled)
+        reservation.waiters -= 1
+        return true
+      }
+      const finish = (value: SessionImportResult<SessionImportCommitValue>): void => {
+        if (!leave()) return
         resolve(value)
       }
       const cancelled = (): void => {
-        finish(rejected({ code: 'cancelled', message: 'Local session import was cancelled.' }))
+        leave()
+        const result = rejected<SessionImportCommitValue>({
+          code: 'cancelled', message: 'Local session import was cancelled.',
+        })
+        if (reservation.waiters > 0 || reservation.settled) {
+          resolve(result)
+          return
+        }
+        reservation.controller?.abort(new DOMException('All commit callers cancelled', 'AbortError'))
+        void Promise.allSettled([commit]).then(() => { resolve(result) })
       }
       signal.addEventListener('abort', cancelled, { once: true })
       void commit.then(finish, () => {
@@ -567,11 +587,6 @@ export class LocalSessionImportService extends TypertRemoteService {
           code: 'internal', message: 'Local session import failed without publishing a partial session.',
         }))
       })
-    }).finally(() => {
-      reservation.waiters -= 1
-      if (reservation.waiters === 0 && !reservation.settled) {
-        reservation.controller?.abort(new DOMException('All commit callers cancelled', 'AbortError'))
-      }
     })
   }
 
@@ -636,6 +651,7 @@ export class LocalSessionImportService extends TypertRemoteService {
         )) {
           return rejected({ code: 'target-conflict', message: 'The deterministic import target already contains different data.' })
         }
+        signal.throwIfAborted()
         const workspaceAttached = await workspace.attachSession(sessionId).then(() => true, () => false)
         return success({ sessionId, existing: true, workspaceAttached })
       }
@@ -704,19 +720,21 @@ export class LocalSessionImportService extends TypertRemoteService {
       }
       try {
         await this.ctx.sessionPersistence.append(sessionId, events)
-      } catch {
+      } catch (error) {
         const won = await this.inspectDurableWinner(sessionId, signal)
-        if (won === undefined
-          || !matchingImport(
-            snapshot, won.meta, won.events, workspace.path, preset.id, model.provider, model.id,
-          )) {
+        if (won === undefined) return rejected(failure(error))
+        if (!matchingImport(
+          snapshot, won.meta, won.events, workspace.path, preset.id, model.provider, model.id,
+        )) {
           return rejected({ code: 'target-conflict', message: 'Another writer claimed the import target with different data.' })
         }
+        signal.throwIfAborted()
         const workspaceAttached = await workspace.attachSession(sessionId).then(() => true, () => false)
         return success({ sessionId, existing: true, workspaceAttached })
       }
       // The complete first batch is the commit and publication boundary. No
       // reserved/snapshot-only state is visible through SessionPersistence.
+      signal.throwIfAborted()
       const workspaceAttached = await workspace.attachSession(sessionId).then(() => true, () => false)
       return success({ sessionId, existing: false, workspaceAttached })
     } catch (error) {

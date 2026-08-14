@@ -218,6 +218,8 @@ type Backend = 'jsonl' | 'sqlite'
 interface ImportHarness {
   readonly ctx: Context
   readonly reservationId: string
+  readonly disposeImport: () => Promise<void>
+  readonly disposePersistence: () => Promise<void>
   readonly dispose: () => Promise<void>
 }
 
@@ -247,16 +249,23 @@ async function harness(
     ? await ctx.plugin(JsonlSessionPersistence, { root: location, compression: 'none' })
     : await ctx.plugin(SqliteSessionPersistence, { path: location })
   ctx.sessionImports.registerProvider(new StaticProvider(value))
-  await ctx.plugin(LocalSessionImportService, options.config ?? CONFIG)
+  const importer = await ctx.plugin(LocalSessionImportService, options.config ?? CONFIG)
   const captured = await ctx.sessionImportLocal.capture({
     sourceKind: 'codex',
     sourceSessionId: value.provenance.sourceSessionId,
   }, new AbortController().signal)
   if (!captured.ok) throw new Error(`capture failed: ${captured.error.code}`)
+  const disposeImport = async (): Promise<void> => { await importer.dispose() }
+  const disposePersistence = async (): Promise<void> => { await persistence.dispose() }
   return {
     ctx,
     reservationId: captured.value.reservationId,
-    dispose: async () => { await persistence.dispose() },
+    disposeImport,
+    disposePersistence,
+    dispose: async () => {
+      await disposeImport()
+      await disposePersistence()
+    },
   }
 }
 
@@ -492,20 +501,29 @@ describe('local session import', () => {
     }
   })
 
-  it('cancels a sole commit waiter, keeps the reservation retryable, and rejects conflicting callers', async () => {
+  it('waits for a sole cancelled commit to become quiescent before returning', async () => {
     const root = await tempRoot('dsh-import-sole-cancel-')
     const value = snapshot('sole-cancel')
     const item = await harness('jsonl', root, value, {
       config: Object.assign({}, CONFIG, { maxReservations: 1 }),
     })
     try {
-      const standing = deferred<{ agentPreset: string }>()
-      const standingKeyFor = vi.spyOn(item.ctx.agentPresets, 'standingKeyFor')
-        .mockImplementationOnce(() => standing.promise)
+      const appendStarted = deferred<true>()
+      const releaseAppend = deferred<true>()
+      const append = item.ctx.sessionPersistence.append.bind(item.ctx.sessionPersistence)
+      const publication = vi.spyOn(item.ctx.sessionPersistence, 'append')
+        .mockImplementationOnce(async (id, events) => {
+          appendStarted.resolve(true)
+          await releaseAppend.promise
+          await append(id, events)
+        })
+      const workspace = item.ctx.workspaceRegistry.list()[0]!
+      const attach = vi.spyOn(workspace, 'attachSession')
       const controller = new AbortController()
       const committing = item.ctx.sessionImportLocal.commit({
         ...COMMIT_TARGET, reservationId: item.reservationId,
       }, controller.signal)
+      await appendStarted.promise
 
       await expect(item.ctx.sessionImportLocal.commit({
         ...COMMIT_TARGET,
@@ -523,14 +541,24 @@ describe('local session import', () => {
       })
 
       controller.abort()
+      let returned = false
+      void committing.then(() => { returned = true })
+      await Promise.resolve()
+      expect(returned).toBe(false)
+      releaseAppend.resolve(true)
       await expect(committing).resolves.toMatchObject({ ok: false, error: { code: 'cancelled' } })
-      standing.resolve({ agentPreset: 'preset' })
+      const persisted = await item.ctx.sessionPersistence.inspect(importedSessionId(value))
+      expect(persisted.events.at(-1)?.type).toBe('session/end-seed')
+      expect(publication).toHaveBeenCalledOnce()
+      expect(attach).not.toHaveBeenCalled()
       await waitForReservationReset(item.ctx.sessionImportLocal, item.reservationId)
-      standingKeyFor.mockRestore()
 
       await expect(item.ctx.sessionImportLocal.commit({
         ...COMMIT_TARGET, reservationId: item.reservationId,
-      }, new AbortController().signal)).resolves.toMatchObject({ ok: true })
+      }, new AbortController().signal)).resolves.toMatchObject({
+        ok: true, value: { existing: true, workspaceAttached: true },
+      })
+      expect(attach).toHaveBeenCalledOnce()
     } finally {
       await item.dispose()
     }
@@ -721,17 +749,51 @@ describe('local session import', () => {
     }
   })
 
-  it('rejects new capture work after the service lifecycle is disposed', async () => {
+  it('waits for an in-flight commit during disposal and starts no post-unload attachment', async () => {
     const root = await tempRoot('dsh-import-disposed-')
     const value = snapshot('disposed')
     const item = await harness('jsonl', root, value)
     const service = item.ctx.sessionImportLocal
-    await item.ctx.fiber.dispose()
-    await expect(service.capture({
-      sourceKind: 'codex', sourceSessionId: value.provenance.sourceSessionId,
-    }, new AbortController().signal)).resolves.toMatchObject({
-      ok: false, error: { code: 'internal' },
-    })
+    try {
+      const appendStarted = deferred<true>()
+      const releaseAppend = deferred<true>()
+      const append = item.ctx.sessionPersistence.append.bind(item.ctx.sessionPersistence)
+      vi.spyOn(item.ctx.sessionPersistence, 'append').mockImplementationOnce(async (id, events) => {
+        appendStarted.resolve(true)
+        await releaseAppend.promise
+        await append(id, events)
+      })
+      const attach = vi.spyOn(item.ctx.workspaceRegistry.list()[0]!, 'attachSession')
+      const committing = service.commit({
+        ...COMMIT_TARGET, reservationId: item.reservationId,
+      }, new AbortController().signal)
+      await appendStarted.promise
+
+      const disposing = item.disposeImport()
+      let disposed = false
+      void disposing.then(() => { disposed = true })
+      await Promise.resolve()
+      expect(disposed).toBe(false)
+      releaseAppend.resolve(true)
+      await disposing
+
+      await expect(committing).resolves.toMatchObject({ ok: false, error: { code: 'cancelled' } })
+      const persisted = await item.ctx.sessionPersistence.inspect(importedSessionId(value))
+      expect(persisted.events.at(-1)?.type).toBe('session/end-seed')
+      expect(attach).not.toHaveBeenCalled()
+      await expect(service.capture({
+        sourceKind: 'codex', sourceSessionId: value.provenance.sourceSessionId,
+      }, new AbortController().signal)).resolves.toMatchObject({
+        ok: false, error: { code: 'internal' },
+      })
+      await expect(service.commit({
+        ...COMMIT_TARGET, reservationId: item.reservationId,
+      }, new AbortController().signal)).resolves.toMatchObject({
+        ok: false, error: { code: 'internal' },
+      })
+    } finally {
+      await item.disposePersistence()
+    }
   })
 
   it('keeps failed target resolution retryable and never publishes a half session', async () => {
@@ -804,9 +866,12 @@ describe('local session import', () => {
         } else {
           vi.spyOn(item.ctx.sessionPersistence, 'append').mockRejectedValueOnce(new Error('publication failed'))
         }
+        const expectedCode = stage === 'sizing' ? 'context-too-large' : 'internal'
         await expect(item.ctx.sessionImportLocal.commit({
           ...COMMIT_TARGET, reservationId: item.reservationId,
-        }, new AbortController().signal)).resolves.toMatchObject({ ok: false })
+        }, new AbortController().signal)).resolves.toMatchObject({
+          ok: false, error: { code: expectedCode },
+        })
         await expect(item.ctx.sessionPersistence.inspect(importedSessionId(value))).rejects.toThrow()
         await expect(item.ctx.sessionImportLocal.commit({
           ...COMMIT_TARGET, reservationId: item.reservationId,
@@ -844,6 +909,35 @@ describe('local session import', () => {
       await publication
       const persisted = await item.ctx.sessionPersistence.inspect(importedSessionId(value))
       expect(persisted.events.at(-1)?.type).toBe('session/end-seed')
+    } finally {
+      await item.dispose()
+    }
+  })
+
+  it('reports a durable mismatching winner as a conflict after append failure', async () => {
+    const root = await tempRoot('dsh-import-publish-mismatch-')
+    const value = snapshot('publish-mismatch')
+    const item = await harness('jsonl', root, value)
+    try {
+      vi.spyOn(item.ctx.sessionPersistence, 'append').mockRejectedValueOnce(new Error('claim lost'))
+      const service = item.ctx.sessionImportLocal as unknown as {
+        inspectDurableWinner: () => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>
+      }
+      vi.spyOn(service, 'inspectDurableWinner').mockResolvedValueOnce({
+        meta: {
+          version: SESSION_FORMAT_VERSION,
+          id: importedSessionId(value),
+          createdAt: value.provenance.capturedAt,
+          cwd: '/tmp/different-workspace',
+          agentPreset: 'different-preset',
+        },
+        events: [],
+      })
+      await expect(item.ctx.sessionImportLocal.commit({
+        ...COMMIT_TARGET, reservationId: item.reservationId,
+      }, new AbortController().signal)).resolves.toMatchObject({
+        ok: false, error: { code: 'target-conflict' },
+      })
     } finally {
       await item.dispose()
     }
